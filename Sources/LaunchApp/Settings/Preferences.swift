@@ -1,0 +1,154 @@
+// Settings/Preferences.swift
+// All user settings, stored as one JSON blob in UserDefaults. Every field decodes with a
+// default, so settings written by an older version always load.
+
+import AppKit
+import Combine
+
+enum BackgroundStyle: String, Codable, CaseIterable, Identifiable {
+    case wallpaper, glass, dark
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .wallpaper: return "Blurred Wallpaper"
+        case .glass: return "Liquid Glass"
+        case .dark: return "Dark"
+        }
+    }
+}
+
+enum ScrollMode: String, Codable, CaseIterable, Identifiable {
+    case paged, vertical
+    var id: String { rawValue }
+    var title: String { self == .paged ? "Pages" : "Vertical Scroll" }
+}
+
+enum DisplayMode: String, Codable, CaseIterable, Identifiable {
+    case fullScreen, window
+    var id: String { rawValue }
+    var title: String { self == .fullScreen ? "Full Screen" : "Window" }
+}
+
+enum HotCorner: String, Codable, CaseIterable, Identifiable {
+    case none, topLeft, topRight, bottomLeft, bottomRight
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .none: return "Off"
+        case .topLeft: return "Top Left"
+        case .topRight: return "Top Right"
+        case .bottomLeft: return "Bottom Left"
+        case .bottomRight: return "Bottom Right"
+        }
+    }
+}
+
+struct Settings: Codable, Equatable {
+    // General
+    var showInDock = true
+    var showMenuBarIcon = true
+    var closeAfterLaunch = true
+    var showAppsInDockMenu = true
+    var autoCheckUpdates = true
+    var autoInstallUpdates = false
+
+    // Activation
+    var hotKeyEnabled = true
+    var hotKey: KeyCombo? = KeyCombo(key: "l", modifiers: NSEvent.ModifierFlags([.option, .command]).rawValue)
+    var launchpadKeyEnabled = false
+    var trackpadPinchEnabled = false
+    var hotCorner: HotCorner = .none
+    var hotCornerDelay: Double = 0.25
+
+    // Appearance
+    var columns = 7
+    var rows = 5
+    var iconScale: Double = 1.0
+    var labelSize: Double = 13
+    var showLabels = true
+    var background: BackgroundStyle = .wallpaper
+    var backgroundDim: Double = 0.25
+    var scrollMode: ScrollMode = .paged
+    var displayMode: DisplayMode = .fullScreen
+    var windowScale: Double = 0.72
+    var animationSpeed: Double = 1.0
+    var showPageDots = true
+    var folderColumns = 6
+    var folderRows = 3
+
+    // Apps
+    var hiddenApps: [AppID] = []
+    var renamedApps: [AppID: String] = [:]
+    var extraSources: [String] = []
+    var removeLeftoversOnUninstall = true
+
+    var capacity: Int { max(1, columns * rows) }
+    var folderCapacity: Int { max(1, folderColumns * folderRows) }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Settings()
+        func v<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
+            (try? c.decodeIfPresent(T.self, forKey: key)) ?? fallback
+        }
+        showInDock = v(.showInDock, d.showInDock)
+        showMenuBarIcon = v(.showMenuBarIcon, d.showMenuBarIcon)
+        closeAfterLaunch = v(.closeAfterLaunch, d.closeAfterLaunch)
+        showAppsInDockMenu = v(.showAppsInDockMenu, d.showAppsInDockMenu)
+        autoCheckUpdates = v(.autoCheckUpdates, d.autoCheckUpdates)
+        autoInstallUpdates = v(.autoInstallUpdates, d.autoInstallUpdates)
+        hotKeyEnabled = v(.hotKeyEnabled, d.hotKeyEnabled)
+        hotKey = c.contains(.hotKey) ? (try? c.decodeIfPresent(KeyCombo.self, forKey: .hotKey)) ?? nil : d.hotKey
+        launchpadKeyEnabled = v(.launchpadKeyEnabled, d.launchpadKeyEnabled)
+        trackpadPinchEnabled = v(.trackpadPinchEnabled, d.trackpadPinchEnabled)
+        hotCorner = v(.hotCorner, d.hotCorner)
+        hotCornerDelay = v(.hotCornerDelay, d.hotCornerDelay)
+        columns = v(.columns, d.columns)
+        rows = v(.rows, d.rows)
+        iconScale = v(.iconScale, d.iconScale)
+        labelSize = v(.labelSize, d.labelSize)
+        showLabels = v(.showLabels, d.showLabels)
+        background = v(.background, d.background)
+        backgroundDim = v(.backgroundDim, d.backgroundDim)
+        scrollMode = v(.scrollMode, d.scrollMode)
+        displayMode = v(.displayMode, d.displayMode)
+        windowScale = v(.windowScale, d.windowScale)
+        animationSpeed = v(.animationSpeed, d.animationSpeed)
+        showPageDots = v(.showPageDots, d.showPageDots)
+        folderColumns = v(.folderColumns, d.folderColumns)
+        folderRows = v(.folderRows, d.folderRows)
+        hiddenApps = v(.hiddenApps, d.hiddenApps)
+        renamedApps = v(.renamedApps, d.renamedApps)
+        extraSources = v(.extraSources, d.extraSources)
+        removeLeftoversOnUninstall = v(.removeLeftoversOnUninstall, d.removeLeftoversOnUninstall)
+    }
+}
+
+final class Preferences: ObservableObject {
+    static let shared = Preferences()
+    private static let key = "settings.v1"
+
+    @Published var settings: Settings {
+        didSet { if settings != oldValue { save() } }
+    }
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let data = defaults.data(forKey: Self.key),
+           let s = try? JSONDecoder().decode(Settings.self, from: data) {
+            settings = s
+        } else {
+            settings = Settings()
+        }
+    }
+
+    private func save() {
+        if let data = try? JSONEncoder().encode(settings) { defaults.set(data, forKey: Self.key) }
+    }
+
+    var appSources: [URL] { AppSources.expanded(AppSources.defaults + settings.extraSources) }
+}
