@@ -14,6 +14,8 @@ protocol LauncherHost: AnyObject {
     func beginDockDrag(app: AppInfo)
     func showMenu(_ entries: [MenuEntry], at point: CGPoint)
     func pointerIsOverDock() -> Bool
+    /// How far the Dock reaches in from the left/right window edges (0 when it's elsewhere).
+    func dockSideInsets() -> (left: CGFloat, right: CGFloat)
 }
 
 struct MenuEntry {
@@ -85,6 +87,8 @@ final class LauncherModel: ObservableObject {
     @Published var compact = false
     @Published var backgroundImage: CGImage?
     @Published var focusSearchToken = 0
+    /// The open folder's name field is being edited (keys go to it, not to navigation).
+    var folderTitleEditing = false
 
     private var mainPageBeforeSearch = 0
     private var saveWork: DispatchWorkItem?
@@ -199,6 +203,7 @@ final class LauncherModel: ObservableObject {
         var l = layout
         l.reconcile(installed: visible.map(\.id), capacity: settings.capacity)
         if l != layout { layout = l; scheduleSave() }
+        recomputeResults()
         clampPage()
     }
 
@@ -265,6 +270,13 @@ final class LauncherModel: ObservableObject {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
+    /// Writes a pending save right away (on quit).
+    func saveNow() {
+        guard persists, let work = saveWork, !work.isCancelled else { return }
+        work.cancel()
+        LayoutStore.save(layout)
+    }
+
     func clampPage() {
         page = min(max(0, page), pageCount - 1)
         if isVertical {
@@ -285,7 +297,7 @@ final class LauncherModel: ObservableObject {
         editing = false
         selection = []
         keyboardIndex = nil
-        drag = nil
+        cancelItemDrag()
         dialog = nil
         pageOffset = 0
         clampPage()
@@ -296,7 +308,7 @@ final class LauncherModel: ObservableObject {
         openFolderID = nil
         editing = false
         optionHeld = false
-        drag = nil
+        cancelItemDrag()
         mergeTargetID = nil
         query = ""
     }
@@ -311,16 +323,7 @@ final class LauncherModel: ObservableObject {
                 openFolderID = nil
                 editing = false
             }
-            let hidden = Set(settings.hiddenApps)
-            let scored: [(AppID, Int)] = apps.values.compactMap { app in
-                guard !hidden.contains(app.id) else { return nil }
-                let display = name(of: app.id)
-                let extra = display == app.name ? [] : [app.name]
-                return Search.score(name: display, query: query, extra: extra).map { (app.id, $0) }
-            }
-            results = scored.sorted { a, b in
-                a.1 != b.1 ? a.1 > b.1 : name(of: a.0).localizedStandardCompare(name(of: b.0)) == .orderedAscending
-            }.map(\.0)
+            recomputeResults()
             page = 0
             scrollY = 0
             keyboardIndex = results.isEmpty ? nil : 0
@@ -331,11 +334,30 @@ final class LauncherModel: ObservableObject {
         }
     }
 
+    /// Search results for the current query (also after apps are hidden or removed).
+    func recomputeResults() {
+        guard isSearching else { results = []; return }
+        do {
+            let hidden = Set(settings.hiddenApps)
+            let scored: [(AppID, Int)] = apps.values.compactMap { app in
+                guard !hidden.contains(app.id) else { return nil }
+                let display = name(of: app.id)
+                let extra = display == app.name ? [] : [app.name]
+                return Search.score(name: display, query: query, extra: extra).map { (app.id, $0) }
+            }
+            results = scored.sorted { a, b in
+                a.1 != b.1 ? a.1 > b.1 : name(of: a.0).localizedStandardCompare(name(of: b.0)) == .orderedAscending
+            }.map(\.0)
+        }
+        if let k = keyboardIndex, k >= results.count { keyboardIndex = results.isEmpty ? nil : results.count - 1 }
+        clampPage()
+    }
+
     // MARK: - Opening things
 
     func launch(_ appID: AppID) {
         guard let app = apps[appID] else { return }
-        AppActions.open(app)
+        AppActions.open(app, activate: settings.closeAfterLaunch)
         if settings.closeAfterLaunch { host?.dismissLauncher(launching: true) }
     }
 
@@ -441,15 +463,19 @@ final class LauncherModel: ObservableObject {
             return
         }
         let leftovers = settings.removeLeftoversOnUninstall
-            ? ids.compactMap { apps[$0] }.reduce(0) { $0 + AppActions.leftovers(of: $1).count } : 0
+            ? ids.compactMap { apps[$0] }.reduce(0) { $0 + AppActions.leftovers(of: $1, otherApps: Array(apps.values)).count } : 0
         withAnimation(anim(0.25)) { dialog = .uninstall(ids, leftovers: leftovers) }
     }
 
     func confirmUninstall(_ appIDs: [AppID]) {
         dialog = nil
+        // Finder's password prompt opens below the launcher, so step aside first.
+        if appIDs.compactMap({ apps[$0] }).contains(where: AppActions.needsAdmin) {
+            host?.dismissLauncher(launching: true)
+        }
         for id in appIDs {
             guard let app = apps[id] else { continue }
-            let extra = settings.removeLeftoversOnUninstall ? AppActions.leftovers(of: app) : []
+            let extra = settings.removeLeftoversOnUninstall ? AppActions.leftovers(of: app, otherApps: Array(apps.values)) : []
             AppActions.uninstall(app, extra: extra) { [weak self] error in
                 guard let self else { return }
                 if let error { self.showToast(error); return }
@@ -458,6 +484,7 @@ final class LauncherModel: ObservableObject {
                     self.layout.reflow(capacity: self.settings.capacity)
                     self.apps.removeValue(forKey: id)
                     self.selection.removeAll { $0 == id }
+                    self.recomputeResults()
                     self.clampPage()
                 }
                 self.scheduleSave()

@@ -6,9 +6,9 @@ import AppKit
 
 enum AppActions {
 
-    static func open(_ app: AppInfo) {
+    static func open(_ app: AppInfo, activate: Bool = true) {
         let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
+        config.activates = activate
         NSWorkspace.shared.openApplication(at: app.url, configuration: config) { _, error in
             if let error { Log.error("open \(app.name): \(error.localizedDescription)") }
         }
@@ -109,37 +109,56 @@ enum AppActions {
 
     // MARK: - Uninstall
 
+    /// Apps under /System, and Apple's own apps (Safari and friends live in /Applications but
+    /// are protected by SIP), can't be uninstalled.
     static func canUninstall(_ app: AppInfo) -> Bool {
-        !app.isSystem && !app.url.path.hasPrefix("/System/")
+        !app.isSystem && !app.url.path.hasPrefix("/System/") && !(app.bundleID?.hasPrefix("com.apple.") ?? false)
     }
 
-    /// Files the app keeps in ~/Library, found by bundle id and by name.
-    static func leftovers(of app: AppInfo) -> [URL] {
+    /// A bundle id or name is only used to build a path if it can't escape its folder.
+    static func isSafeComponent(_ s: String) -> Bool {
+        !s.isEmpty && s != "." && s != ".." && !s.contains("/") && !s.contains(":") && !s.contains("..")
+            && !s.hasPrefix(".") && s.trimmingCharacters(in: .whitespaces) == s
+    }
+
+    /// Files the app keeps in ~/Library, found by bundle id and by name. Every result is a
+    /// direct child of a known ~/Library subfolder. Nothing is returned when another
+    /// installed app shares the bundle id (its settings would go too).
+    static func leftovers(of app: AppInfo, otherApps: [AppInfo] = []) -> [URL] {
         let fm = FileManager.default
-        let lib = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library")
-        var candidates: [String] = []
-        if let id = app.bundleID, !id.isEmpty {
+        let lib = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library").standardizedFileURL
+        if let id = app.bundleID, otherApps.contains(where: { $0.url != app.url && $0.bundleID == id }) { return [] }
+
+        var candidates: [(dir: String, name: String)] = []
+        if let id = app.bundleID, isSafeComponent(id), id.contains(".") {
             candidates += [
-                "Application Support/\(id)", "Caches/\(id)", "Preferences/\(id).plist",
-                "Containers/\(id)", "Saved Application State/\(id).savedState", "HTTPStorages/\(id)",
-                "HTTPStorages/\(id).binarycookies", "WebKit/\(id)", "Cookies/\(id).binarycookies",
-                "Logs/\(id)", "Application Scripts/\(id)", "Caches/com.crashlytics.data/\(id)",
+                ("Application Support", id), ("Caches", id), ("Preferences", "\(id).plist"),
+                ("Containers", id), ("Saved Application State", "\(id).savedState"), ("HTTPStorages", id),
+                ("HTTPStorages", "\(id).binarycookies"), ("WebKit", id), ("Cookies", "\(id).binarycookies"),
+                ("Logs", id), ("Application Scripts", id),
             ]
-            // Launch agents named after the bundle id.
-            if let agents = try? fm.contentsOfDirectory(atPath: lib.appendingPathComponent("LaunchAgents").path) {
-                candidates += agents.filter { $0.hasPrefix(id) }.map { "LaunchAgents/\($0)" }
-            }
+            // com.example.app.plist's siblings like com.example.app.helper.plist.
             if let prefs = try? fm.contentsOfDirectory(atPath: lib.appendingPathComponent("Preferences").path) {
-                candidates += prefs.filter { $0.hasPrefix(id + ".") && $0 != "\(id).plist" }.map { "Preferences/\($0)" }
+                candidates += prefs.filter { $0.hasPrefix(id + ".") && $0.hasSuffix(".plist") }.map { ("Preferences", $0) }
+            }
+            if let agents = try? fm.contentsOfDirectory(atPath: lib.appendingPathComponent("LaunchAgents").path) {
+                candidates += agents.filter { $0 == "\(id).plist" || ($0.hasPrefix(id + ".") && $0.hasSuffix(".plist")) }
+                    .map { ("LaunchAgents", $0) }
             }
         }
+        // By name only for distinctive names — "Notes" or "Mail" folders may belong to others.
         let name = app.name
-        if name.count >= 3 {
-            candidates += ["Application Support/\(name)", "Caches/\(name)", "Logs/\(name)"]
+        if name.count >= 4, isSafeComponent(name), !(app.bundleID ?? "").isEmpty {
+            candidates += [("Application Support", name), ("Caches", name), ("Logs", name)]
         }
         var seen = Set<String>()
-        return candidates.map { lib.appendingPathComponent($0) }
-            .filter { fm.fileExists(atPath: $0.path) && seen.insert($0.path).inserted }
+        return candidates.compactMap { c -> URL? in
+            let dir = lib.appendingPathComponent(c.dir, isDirectory: true).standardizedFileURL
+            let url = dir.appendingPathComponent(c.name).standardizedFileURL
+            guard url.deletingLastPathComponent().path == dir.path, url.path.hasPrefix(lib.path + "/"),
+                  fm.fileExists(atPath: url.path), seen.insert(url.path).inserted else { return nil }
+            return url
+        }
     }
 
     /// Quits the app if it runs, then moves it (and `extra` files) to the Trash.
@@ -152,19 +171,31 @@ enum AppActions {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             NSWorkspace.shared.recycle([app.url]) { _, error in
-                if error != nil {
-                    // Root-owned app: let Finder do it (it shows the password prompt).
-                    let script = "tell application \"Finder\" to delete (POSIX file \"\(app.url.path.replacingOccurrences(of: "\"", with: "\\\""))\")"
-                    var err: NSDictionary?
-                    NSAppleScript(source: script)?.executeAndReturnError(&err)
-                    if FileManager.default.fileExists(atPath: app.url.path) {
-                        DispatchQueue.main.async { completion("Couldn't move \(app.name) to the Trash.") }
-                        return
-                    }
+                guard error != nil else {
+                    if !extra.isEmpty { NSWorkspace.shared.recycle(extra, completionHandler: nil) }
+                    DispatchQueue.main.async { completion(nil) }
+                    return
                 }
-                if !extra.isEmpty { NSWorkspace.shared.recycle(extra, completionHandler: nil) }
-                DispatchQueue.main.async { completion(nil) }
+                // Root-owned app: let Finder do it (it asks for an administrator password).
+                // osascript runs off the main thread so the UI never waits on the prompt.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let p = Process()
+                    p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                    p.arguments = ["-e", "on run argv", "-e", "tell application \"Finder\" to delete (POSIX file (item 1 of argv))",
+                                   "-e", "end run", app.url.path]
+                    try? p.run()
+                    p.waitUntilExit()
+                    let gone = !FileManager.default.fileExists(atPath: app.url.path)
+                    if gone, !extra.isEmpty { NSWorkspace.shared.recycle(extra, completionHandler: nil) }
+                    DispatchQueue.main.async { completion(gone ? nil : "Couldn't move \(app.name) to the Trash.") }
+                }
             }
         }
+    }
+
+    /// True when moving the app needs Finder (and a password) — the launcher steps aside first.
+    static func needsAdmin(_ app: AppInfo) -> Bool {
+        !FileManager.default.isWritableFile(atPath: app.url.deletingLastPathComponent().path)
+            || !FileManager.default.isWritableFile(atPath: app.url.path)
     }
 }

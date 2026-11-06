@@ -91,6 +91,9 @@ extension LauncherModel {
             return .outsideFolder
         }
         if settings.showPageDots, !isVertical, let dot = metrics.pageDot(at: p, count: pageCount) { return .pageDot(dot) }
+        // In the vertical view, rows scrolled under the fades can't be clicked.
+        let g = metrics.gridRect
+        if isVertical, p.y < g.minY - 4 || p.y > g.maxY + 10 { return .empty }
         for (item, slot) in visibleSlots {
             if isEditing, canUninstall(item), deleteBadgeRect(center: onScreenCenter(slot: slot)).contains(p) {
                 return .deleteBadge(item.id)
@@ -353,8 +356,13 @@ extension LauncherModel {
         d.location = p
         drag = d
 
-        // Over the Dock: hand the app to a real drag session so the Dock can take it.
-        if d.ids.count == 1, apps[d.ids[0]] != nil, layout.item(id: d.ids[0])?.isFolder != true,
+        // Over the Dock (but not in a page-flip zone): hand the app to a real drag session
+        // so the Dock can take it.
+        let insets = host?.dockSideInsets() ?? (left: 0, right: 0)
+        let edge = max(36, size.width * 0.035)
+        let inFlipZone = !isVertical && d.fromFolder == nil
+            && ((p.x >= insets.left && p.x < insets.left + edge) || (p.x <= size.width - insets.right && p.x > size.width - insets.right - edge))
+        if !inFlipZone, d.ids.count == 1, apps[d.ids[0]] != nil, layout.item(id: d.ids[0])?.isFolder != true,
            host?.pointerIsOverDock() == true, let app = apps[d.ids[0]] {
             cancelItemDrag()
             host?.beginDockDrag(app: app)
@@ -390,8 +398,7 @@ extension LauncherModel {
         let now = Date()
         // Flip pages at the left/right edges.
         if !isVertical {
-            let edge = max(36, size.width * 0.035)
-            let dir = p.x < edge ? -1 : (p.x > size.width - edge ? 1 : 0)
+            let dir = p.x < insets.left + edge ? -1 : (p.x > size.width - insets.right - edge ? 1 : 0)
             if dir != 0 {
                 if d.edgeSince == nil { d.edgeSince = now }
                 if let since = d.edgeSince, now.timeIntervalSince(since) > 0.55 {
@@ -688,7 +695,7 @@ extension LauncherModel {
         return [
             MenuEntry(title: "Open \(appIDs.count) Apps", symbol: "arrow.up.forward.app", enabled: !appIDs.isEmpty) { [weak self] in
                 guard let self else { return }
-                appIDs.compactMap { self.apps[$0] }.forEach(AppActions.open)
+                appIDs.compactMap { self.apps[$0] }.forEach { AppActions.open($0) }
                 self.host?.dismissLauncher(launching: true)
             },
             MenuEntry(title: "New Folder with \(appIDs.count) Apps", symbol: "folder.badge.plus", enabled: appIDs.count >= 2) { [weak self] in

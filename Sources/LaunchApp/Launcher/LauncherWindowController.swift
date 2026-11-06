@@ -102,6 +102,8 @@ final class LauncherWindowController: NSObject, LauncherHost, NSWindowDelegate {
             NSApp.presentationOptions = [.autoHideMenuBar]
         }
         window.alphaValue = 1
+        NSApp.unhide(nil)
+        window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
         window.makeFirstResponder(hosting)
@@ -162,8 +164,7 @@ final class LauncherWindowController: NSObject, LauncherHost, NSWindowDelegate {
             }
             // While a text field other than search (folder title, rename) is editing, leave
             // most keys alone.
-            if let editor = self.window.firstResponder as? NSTextView, self.model.openFolderID != nil || self.model.dialog != nil,
-               editor.isFieldEditor, event.keyCode != 53 {
+            if self.model.folderTitleEditing || self.model.dialog != nil, event.keyCode != 53 {
                 return event
             }
             let handled = self.model.keyDown(keyCode: event.keyCode, modifiers: event.modifierFlags,
@@ -185,6 +186,10 @@ final class LauncherWindowController: NSObject, LauncherHost, NSWindowDelegate {
         menu.popUp(positioning: nil, at: NSPoint(x: point.x, y: point.y), in: interaction)
     }
 
+    private var dockOrientation: String {
+        (CFPreferencesCopyAppValue("orientation" as CFString, "com.apple.dock" as CFString) as? String) ?? "bottom"
+    }
+
     func pointerIsOverDock() -> Bool {
         guard let screen = window.screen ?? NSScreen.main else { return false }
         let p = NSEvent.mouseLocation
@@ -193,8 +198,19 @@ final class LauncherWindowController: NSObject, LauncherHost, NSWindowDelegate {
         if bottom > 8 { return p.y < f.minY + bottom }
         if left > 8 { return p.x < f.minX + left }
         if right > 8 { return p.x > f.maxX - right }
-        // Auto-hidden Dock: the very edge reveals it.
-        return p.y < f.minY + 3
+        // Auto-hidden Dock: the very edge on its side reveals it.
+        switch dockOrientation {
+        case "left": return p.x < f.minX + 3
+        case "right": return p.x > f.maxX - 4
+        default: return p.y < f.minY + 3
+        }
+    }
+
+    func dockSideInsets() -> (left: CGFloat, right: CGFloat) {
+        guard model.settings.displayMode == .fullScreen, let screen = window.screen ?? NSScreen.main else { return (0, 0) }
+        let f = screen.frame, v = screen.visibleFrame
+        let left = v.minX - f.minX, right = f.maxX - v.maxX
+        return (left > 8 ? left : 0, right > 8 ? right : 0)
     }
 
     func beginDockDrag(app: AppInfo) {
@@ -202,7 +218,12 @@ final class LauncherWindowController: NSObject, LauncherHost, NSWindowDelegate {
         dockDragActive = true
         interaction.beginFileDrag(url: app.url, icon: IconCache.shared.icon(for: app.url, points: model.metrics.iconSize),
                                   size: model.metrics.iconSize, event: event) { [weak self] in
-            self?.dockDragActive = false
+            guard let self else { return }
+            self.dockDragActive = false
+            // The drop may have activated another app; don't stay on screen without focus.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                if self.isVisible, !self.window.isKeyWindow, !NSApp.isActive { self.dismissLauncher(launching: true) }
+            }
         }
     }
 }
@@ -234,6 +255,7 @@ final class InteractionView: NSView, NSDraggingSource {
     private func point(_ e: NSEvent) -> CGPoint { convert(e.locationInWindow, from: nil) }
 
     override func mouseDown(with e: NSEvent) {
+        if e.modifierFlags.contains(.control) { rightMouseDown(with: e); return }
         // Clicking off the folder title ends its editing.
         if let tv = window?.firstResponder as? NSTextView, tv.isFieldEditor, model?.openFolderID != nil {
             window?.makeFirstResponder(nil)

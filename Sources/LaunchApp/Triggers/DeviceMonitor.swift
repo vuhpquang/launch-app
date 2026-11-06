@@ -18,6 +18,8 @@ private weak var _activeMonitor: DeviceMonitor?
 
 /// Written in start()/stop() while delivery is off; read from the callback thread.
 private var _devices: [MTDevice: TouchDevice] = [:]
+/// Guards _devices/_activeMonitor: they're replaced on the main thread while the callback reads them.
+private let _lock = NSLock()
 
 /// MultitouchSupport family IDs reported by Magic Mouse hardware.
 private let magicMouseFamilyIDs: Set<Int32> = [112, 113]
@@ -55,8 +57,10 @@ final class DeviceMonitor {
             devices[handle] = TouchDevice(handle: handle, deviceID: deviceID, familyID: family,
                                           isMouse: magicMouseFamilyIDs.contains(family))
         }
+        _lock.lock()
         _devices = devices
         _activeMonitor = self
+        _lock.unlock()
 
         for device in devices.values {
             fw.MTRegisterContactFrameCallback?(device.handle, deviceTouchCallback)
@@ -71,8 +75,10 @@ final class DeviceMonitor {
         if fw.isAvailable {
             for handle in _devices.keys { fw.MTDeviceStop?(handle, 0) }
         }
+        _lock.lock()
         _activeMonitor = nil
         _devices = [:]
+        _lock.unlock()
         isRunning = false
         Log.info("DeviceMonitor: stopped.")
     }
@@ -81,7 +87,10 @@ final class DeviceMonitor {
 // MARK: - C callback
 
 private let deviceTouchCallback: MTContactFrameCallback = { handle, fingerData, fingerCount, timestamp, _ in
-    guard let monitor = _activeMonitor, let device = _devices[handle] else { return }
+    _lock.lock()
+    let monitor = _activeMonitor, device = _devices[handle]
+    _lock.unlock()
+    guard let monitor, let device else { return }
     guard fingerCount > 0 else {
         monitor.delegate?.didReceiveFingers([], timestamp: timestamp, device: device)
         return

@@ -195,6 +195,25 @@ final class TriggerTests: XCTestCase {
         XCTAssertEqual(s.hotKey, Settings().hotKey)
     }
 
+    func testUninstallSafety() {
+        XCTAssertFalse(AppActions.isSafeComponent("../../Documents"))
+        XCTAssertFalse(AppActions.isSafeComponent("a/b"))
+        XCTAssertFalse(AppActions.isSafeComponent(".."))
+        XCTAssertTrue(AppActions.isSafeComponent("com.example.app"))
+        func app(_ id: String?, _ path: String, name: String = "Evil") -> AppInfo {
+            AppInfo(id: id ?? path, url: URL(fileURLWithPath: path), name: name, bundleID: id, isSystem: false, isUtility: false)
+        }
+        XCTAssertEqual(AppActions.leftovers(of: app("../../Documents", "/Applications/Evil.app")), [])
+        XCTAssertEqual(AppActions.leftovers(of: app("x", "/Applications/E.app", name: "../..")), [])
+        XCTAssertFalse(AppActions.canUninstall(app("com.apple.Safari", "/Applications/Safari.app")))
+        // Another copy with the same bundle id keeps its settings.
+        let a = app("com.apple.dt.Xcode", "/Applications/Xcode.app"), b = app("com.apple.dt.Xcode", "/Applications/Xcode-beta.app")
+        XCTAssertEqual(AppActions.leftovers(of: b, otherApps: [a, b]), [])
+        for url in AppActions.leftovers(of: app("com.google.Chrome", "/Applications/Google Chrome.app", name: "Google Chrome")) {
+            XCTAssertFalse(url.lastPathComponent.contains("canary"))
+        }
+    }
+
     func testCategoryNames() {
         XCTAssertEqual(AppActions.categoryName("public.app-category.developer-tools"), "Developer Tools")
         XCTAssertEqual(AppActions.categoryName("public.app-category.puzzle-games"), "Games")

@@ -415,7 +415,10 @@ struct FolderOverlay: View {
                 .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
                 .focused($editingTitle)
                 .onSubmit { commit() }
-                .onChange(of: editingTitle) { _, focused in if !focused { commit() } }
+                .onChange(of: editingTitle) { _, focused in
+                    model.folderTitleEditing = focused
+                    if !focused { commit() }
+                }
                 .frame(width: fm.titleFrame.width, height: fm.titleFrame.height)
                 .position(x: fm.titleFrame.midX, y: fm.titleFrame.midY)
 
@@ -452,6 +455,7 @@ struct FolderOverlay: View {
         }
         .frame(width: model.size.width, height: model.size.height)
         .onAppear { title = folder.name }
+        .onDisappear { model.folderTitleEditing = false }
         .onChange(of: folder.id) { _, _ in title = folder.name }
     }
 
