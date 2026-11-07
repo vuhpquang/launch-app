@@ -49,9 +49,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] s in self?.apply(s) }
             .store(in: &cancellables)
 
+        // A display added/removed or resized closes the launcher. Only real frame changes count:
+        // hiding the menu bar while the launcher shows also posts this (visibleFrame changes).
+        var screenFrames = NSScreen.screens.map(\.frame)
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil,
                                                queue: .main) { [weak self] _ in
-            guard let self, self.launcher.isVisible else { return }
+            let frames = NSScreen.screens.map(\.frame)
+            defer { screenFrames = frames }
+            guard let self, self.launcher.isVisible, frames != screenFrames else { return }
             self.launcher.dismissLauncher(launching: true)
         }
 
