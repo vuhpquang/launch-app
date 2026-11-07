@@ -381,7 +381,7 @@ final class LauncherModel: ObservableObject {
     }
 
     func openFolder(_ id: String) {
-        withAnimation(.smooth(duration: 0.34 / max(0.25, settings.animationSpeed))) {
+        withAnimation(.snappy(duration: 0.24 / max(0.25, settings.animationSpeed))) {
             openFolderID = id
             folderPage = 0
             keyboardIndex = nil
@@ -390,7 +390,7 @@ final class LauncherModel: ObservableObject {
 
     func closeFolder() {
         guard openFolderID != nil else { return }
-        withAnimation(.smooth(duration: 0.28 / max(0.25, settings.animationSpeed))) { openFolderID = nil }
+        withAnimation(.snappy(duration: 0.2 / max(0.25, settings.animationSpeed))) { openFolderID = nil }
         keyboardIndex = nil
         scheduleSave()
     }

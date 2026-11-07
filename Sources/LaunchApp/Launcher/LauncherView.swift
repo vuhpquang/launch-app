@@ -22,15 +22,15 @@ struct LauncherView: View {
                 // Opening a folder: the grid recedes under a veil of the (already blurred)
                 // wallpaper. Only opacity/scale animate — an animated blur over the whole
                 // grid made the folder open stutter.
+                // The grid itself is left alone (animating opacity/scale of a layer full of
+                // glass re-renders all of it every frame); only the veil above it fades.
                 GridLayer(model: model, metrics: m)
-                    .scaleEffect(model.openFolderID != nil ? 0.97 : 1)
-                    .opacity(model.openFolderID != nil ? 0.35 : 1)
                 if s.background == .wallpaper, let img = model.backgroundImage {
                     Image(decorative: img, scale: 1).resizable().aspectRatio(contentMode: .fill)
                         .frame(width: model.size.width, height: model.size.height)
                         .clipped()
                         .overlay(Color.black.opacity(s.backgroundDim))
-                        .opacity(model.openFolderID != nil ? 0.8 : 0)
+                        .opacity(model.openFolderID != nil ? 0.88 : 0)
                         .allowsHitTesting(false)
                 } else {
                     Color.black.opacity(model.openFolderID != nil ? 0.35 : 0).allowsHitTesting(false)
@@ -61,7 +61,7 @@ struct LauncherView: View {
             if let folder = model.openFolder, let fm = model.folderMetrics {
                 // Grows out of the folder's icon, like Launchpad.
                 FolderOverlay(model: model, folder: folder, fm: fm)
-                    .transition(.scale(scale: 0.35, anchor: model.folderOrigin).combined(with: .opacity))
+                    .transition(.scale(scale: 0.5, anchor: model.folderOrigin).combined(with: .opacity))
             }
 
             if let drag = model.drag, let item = model.displayItem(id: drag.ids[0]) {
@@ -255,6 +255,7 @@ struct IconTile: View {
     var showDelete = false
     var cellWidth: CGFloat? = nil
     var tilt: CGSize = .zero
+    var lensAt: CGPoint? = nil
 
     var body: some View {
         let s = metrics.iconSize
@@ -325,7 +326,7 @@ struct IconTile: View {
                 RoundedRectangle(cornerRadius: s * 0.22).fill(.white.opacity(0.15)).frame(width: s * 0.8, height: s * 0.8)
             }
         case .folder(let f):
-            FolderIcon(model: model, folder: f, size: s, tilt: tilt)
+            FolderIcon(model: model, folder: f, size: s, tilt: tilt, lensAt: lensAt)
         }
     }
 }
@@ -367,6 +368,9 @@ struct FolderIcon: View {
     let folder: Folder
     let size: CGFloat
     var tilt: CGSize = .zero
+    /// Screen point of this icon's centre while it is being dragged: the glass then bends
+    /// the icons underneath it at its edges.
+    var lensAt: CGPoint? = nil
 
     var body: some View {
         let inner = size * 0.232
@@ -375,6 +379,9 @@ struct FolderIcon: View {
         ZStack {
             LiquidGlassTile(model: model, cornerRadius: size * 0.235 * 0.86, tilt: tilt)
                 .frame(width: size * 0.86, height: size * 0.86)
+            if let lensAt, model.settings.liquidGlass {
+                GlassLens(model: model, center: lensAt, side: size * 0.86, cornerRadius: size * 0.235 * 0.86)
+            }
             VStack(spacing: gap) {
                 ForEach(0..<3, id: \.self) { row in
                     HStack(spacing: gap) {
@@ -404,7 +411,8 @@ struct DraggedIcon: View {
     var body: some View {
         let m = model.metrics
         ZStack(alignment: .topTrailing) {
-            IconTile(model: model, item: item, metrics: m, tilt: tilt)
+            IconTile(model: model, item: item, metrics: m, tilt: tilt,
+                     lensAt: model.drag.map { CGPoint(x: $0.location.x - $0.grab.width, y: $0.location.y - $0.grab.height) })
                 .scaleEffect(1.1)
                 .shadow(color: .black.opacity(0.28), radius: 10, y: 5)
             if count > 1 {
@@ -654,16 +662,15 @@ struct LiquidGlassTile: View {
                     // Always drawn as in a key window: the launcher can be on screen while
                     // another app is active (opened by the hot corner or MCP), and inactive
                     // glass goes flat and dark.
-                    // Frosted, light glass like macOS 26's folders (clear glass vanishes over
-                    // dark wallpapers).
-                    Color.clear.glassEffect(.regular.tint(.white.opacity(0.05)), in: shape)
+                    // Clear glass: see-through, bending what is behind it.
+                    Color.clear.glassEffect(.clear, in: shape)
                         .environment(\.controlActiveState, .key)
                         .environment(\.colorScheme, .light)
                 } else {
                     backdrop(frame: frame)
                 }
                 // Lift: glass brightens what is behind it, more toward the light.
-                LinearGradient(colors: useSystemGlass ? [.white.opacity(0.10), .white.opacity(0.0)]
+                LinearGradient(colors: useSystemGlass ? [.white.opacity(0.06), .white.opacity(0.0)]
                                                       : [.white.opacity(0.30), .white.opacity(0.20)],
                                startPoint: UnitPoint(x: 0.5 + light.direction.dx * 0.5, y: 0.5 + light.direction.dy * 0.5),
                                endPoint: UnitPoint(x: 0.5 - light.direction.dx * 0.5, y: 0.5 - light.direction.dy * 0.5))
@@ -700,6 +707,74 @@ struct LiquidGlassTile: View {
                 .saturation(1.15)
         } else {
             Color.white.opacity(0.10)
+        }
+    }
+}
+
+/// The refraction of a dragged glass folder: the icons under and around it, drawn again
+/// pulled in toward its centre and shown only in a soft band along the edge — the way the
+/// thick rim of a glass pane bends what is behind it. Neighbours start to show in the rim
+/// before the folder reaches them.
+struct GlassLens: View {
+    @ObservedObject var model: LauncherModel
+    let center: CGPoint
+    let side: CGFloat
+    let cornerRadius: CGFloat
+    /// <1: the rim shows a squeezed view of a wider area than the pane covers.
+    private let squeeze: CGFloat = 0.72
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let s = model.metrics.iconSize
+        let dragged = Set(model.drag?.ids ?? [])
+        let reach = side / squeeze * 0.75 + s / 2
+        let near = model.visibleSlots.compactMap { entry -> (LayoutItem, CGPoint)? in
+            guard !dragged.contains(entry.item.id) else { return nil }
+            let c = model.onScreenCenter(slot: entry.slot)
+            return abs(c.x - center.x) < reach && abs(c.y - center.y) < reach ? (entry.item, c) : nil
+        }
+        ZStack {
+            ForEach(near, id: \.0.id) { item, c in
+                lensed(item, size: s * squeeze)
+                    .position(x: side / 2 + (c.x - center.x) * squeeze, y: side / 2 + (c.y - center.y) * squeeze)
+            }
+        }
+        .frame(width: side, height: side)
+        .saturation(1.35)
+        .brightness(0.06)
+        .mask(shape.strokeBorder(lineWidth: side * 0.2).blur(radius: side * 0.05))
+        .clipShape(shape)
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func lensed(_ item: LayoutItem, size: CGFloat) -> some View {
+        switch item {
+        case .app(let id):
+            if let app = model.apps[id] {
+                Image(nsImage: IconCache.shared.icon(for: app.url, points: size)).resizable().frame(width: size, height: size)
+            }
+        case .folder(let f):
+            ZStack {
+                RoundedRectangle(cornerRadius: size * 0.2, style: .continuous).fill(.white.opacity(0.25))
+                    .frame(width: size * 0.86, height: size * 0.86)
+                VStack(spacing: size * 0.05) {
+                    ForEach(0..<3, id: \.self) { row in
+                        HStack(spacing: size * 0.05) {
+                            ForEach(0..<3, id: \.self) { col in
+                                let i = row * 3 + col
+                                if i < f.apps.count, let app = model.apps[f.apps[i]] {
+                                    Image(nsImage: IconCache.shared.icon(for: app.url, points: size * 0.23))
+                                        .resizable().frame(width: size * 0.23, height: size * 0.23)
+                                } else {
+                                    Color.clear.frame(width: size * 0.23, height: size * 0.23)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(width: size, height: size)
         }
     }
 }
