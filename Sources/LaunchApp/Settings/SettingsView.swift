@@ -142,6 +142,24 @@ struct AppearancePane: View {
             }
             Toggle("Show page dots", isOn: $prefs.settings.showPageDots)
             Toggle("Liquid Glass folders", isOn: $prefs.settings.liquidGlass)
+            if prefs.settings.liquidGlass {
+                Picker("Glass", selection: $prefs.settings.glassFollowsSystem) {
+                    Text("Same as System").tag(true)
+                    Text("Custom").tag(false)
+                }
+                if !prefs.settings.glassFollowsSystem {
+                    LabeledContent("Transparency") {
+                        HStack {
+                            Text("Clear").font(.caption).foregroundStyle(.secondary)
+                            Slider(value: $prefs.settings.glassTint, in: 0...1)
+                            Text("Tinted").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    Text("Follows System Settings → Appearance → Liquid Glass (Clear ↔ Tinted).")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
         }
         Section("Background") {
             Picker("Style", selection: $prefs.settings.background) {
@@ -160,6 +178,7 @@ struct AppearancePane: View {
                 s.animationSpeed = d.animationSpeed; s.showPageDots = d.showPageDots
                 s.folderColumns = d.folderColumns; s.folderRows = d.folderRows
                 s.liquidGlass = d.liquidGlass; s.pageTransition = d.pageTransition
+                s.glassFollowsSystem = d.glassFollowsSystem; s.glassTint = d.glassTint
                 prefs.settings = s
             }
         }

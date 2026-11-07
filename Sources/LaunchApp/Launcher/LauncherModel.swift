@@ -62,6 +62,14 @@ struct DragState {
     var lastUpdate = Date()
 }
 
+/// Where the dragged icon is and how fast it moves (see `LauncherModel.drag`).
+final class DragPointer: ObservableObject {
+    @Published var location: CGPoint = .zero
+    @Published var velocity: CGSize = .zero
+    var grab: CGSize = .zero
+    var iconCenter: CGPoint { CGPoint(x: location.x - grab.width, y: location.y - grab.height) }
+}
+
 final class LauncherModel: ObservableObject {
     let prefs: Preferences
     weak var host: LauncherHost?
@@ -82,7 +90,25 @@ final class LauncherModel: ObservableObject {
     @Published var optionHeld = false
     @Published var selection: [String] = []
     @Published var keyboardIndex: Int?
-    @Published var drag: DragState?
+    /// The drag in progress. Not @Published as a whole: the pointer moves many times a
+    /// second, and republishing the model each time redrew every icon on screen. Only
+    /// changes that affect the grid (start/end, which items, the target slot) publish the
+    /// model; the position and speed go to `pointer`, which only the dragged icon watches.
+    var drag: DragState? {
+        willSet {
+            if (drag == nil) != (newValue == nil) || drag?.ids != newValue?.ids
+                || drag?.fromFolder != newValue?.fromFolder || drag?.target != newValue?.target {
+                objectWillChange.send()
+            }
+        }
+        didSet {
+            guard let d = drag else { return }
+            pointer.grab = d.grab
+            if pointer.location != d.location { pointer.location = d.location }
+            if pointer.velocity != d.velocity { pointer.velocity = d.velocity }
+        }
+    }
+    let pointer = DragPointer()
     @Published var mergeTargetID: String?
     @Published var dialog: Dialog?
     @Published var toast: String?
@@ -91,6 +117,7 @@ final class LauncherModel: ObservableObject {
     @Published var compact = false
     @Published var backgroundImage: CGImage?
     @Published var focusSearchToken = 0
+    @Published var systemGlassTint: Double = 0
     /// The open folder's name field is being edited (keys go to it, not to navigation).
     var folderTitleEditing = false
 
@@ -295,7 +322,20 @@ final class LauncherModel: ObservableObject {
         .spring(duration: duration / max(0.25, settings.animationSpeed), bounce: 0.12)
     }
 
+    /// Liquid Glass tint, 0 (clear) … 1 (tinted): the user's own value, or macOS's
+    /// (System Settings → Appearance → Liquid Glass, stored as NSGlassTintAmount).
+    var glassTint: Double {
+        settings.glassFollowsSystem ? systemGlassTint : settings.glassTint
+    }
+    var reduceTransparency: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency }
+
+    func readSystemGlassTint() {
+        let v = UserDefaults.standard.object(forKey: "NSGlassTintAmount") as? Double ?? 0
+        if v != systemGlassTint { systemGlassTint = min(1, max(0, v)) }
+    }
+
     func willPresent() {
+        readSystemGlassTint()
         query = ""
         openFolderID = nil
         editing = false

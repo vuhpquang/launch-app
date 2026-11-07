@@ -65,8 +65,7 @@ struct LauncherView: View {
             }
 
             if let drag = model.drag, let item = model.displayItem(id: drag.ids[0]) {
-                DraggedIcon(model: model, item: item, count: drag.ids.count)
-                    .position(x: drag.location.x - drag.grab.width, y: drag.location.y - drag.grab.height)
+                DragLayer(model: model, pointer: model.pointer, item: item, count: drag.ids.count)
                     .allowsHitTesting(false)
             }
 
@@ -402,17 +401,31 @@ struct FolderIcon: View {
     }
 }
 
-struct DraggedIcon: View {
+/// Follows the pointer; redraws on every mouse move without touching the rest of the UI.
+struct DragLayer: View {
     @ObservedObject var model: LauncherModel
+    @ObservedObject var pointer: DragPointer
     let item: LayoutItem
     let count: Int
-    var tilt: CGSize { model.drag.map { $0.velocity == .zero ? CGSize(width: 0.001, height: 0) : $0.velocity } ?? .zero }
+
+    var body: some View {
+        DraggedIcon(model: model, pointer: pointer, item: item, count: count)
+            .position(pointer.iconCenter)
+    }
+}
+
+struct DraggedIcon: View {
+    @ObservedObject var model: LauncherModel
+    @ObservedObject var pointer: DragPointer
+    let item: LayoutItem
+    let count: Int
+    var tilt: CGSize { pointer.velocity == .zero ? CGSize(width: 0.001, height: 0) : pointer.velocity }
 
     var body: some View {
         let m = model.metrics
         ZStack(alignment: .topTrailing) {
             IconTile(model: model, item: item, metrics: m, tilt: tilt,
-                     lensAt: model.drag.map { CGPoint(x: $0.location.x - $0.grab.width, y: $0.location.y - $0.grab.height) })
+                     lensAt: pointer.iconCenter)
                 .scaleEffect(1.1)
                 .shadow(color: .black.opacity(0.28), radius: 10, y: 5)
             if count > 1 {
@@ -512,9 +525,7 @@ struct FolderOverlay: View {
                 .frame(width: fm.titleFrame.width, height: fm.titleFrame.height)
                 .position(x: fm.titleFrame.midX, y: fm.titleFrame.midY)
 
-            RoundedRectangle(cornerRadius: 36, style: .continuous)
-                .fill(.clear)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 36, style: .continuous))
+            LiquidGlassTile(model: model, cornerRadius: 36, frost: 0.15)
                 .frame(width: panel.width, height: panel.height)
                 .position(x: panel.midX, y: panel.midY)
 
@@ -648,41 +659,47 @@ struct LiquidGlassTile: View {
     @ObservedObject var model: LauncherModel
     let cornerRadius: CGFloat
     var tilt: CGSize = .zero
+    /// Extra frosting for large panes (the open folder), 0…1.
+    var frost: Double = 0
     /// On: the system's Liquid Glass (refracts the wallpaper and icons behind it) with
     /// specular edges. Off: a plain frosted pane.
-    var useSystemGlass: Bool { model.settings.liquidGlass }
+    var useSystemGlass: Bool { model.settings.liquidGlass && !model.reduceTransparency }
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        // 0 = clear … 1 = tinted (Settings, or System Settings → Appearance → Liquid Glass).
+        let tint = min(1, model.glassTint + frost)
         GeometryReader { geo in
             let frame = geo.frame(in: .global)
             let light = GlassLight(frame: frame, screen: model.size, tilt: tilt)
+            // Edge sizes follow the pane up to icon size, then stay put (a big panel keeps a
+            // thin rim instead of a thick band).
+            let e = min(geo.size.width, geo.size.height, 140)
             ZStack(alignment: .topLeading) {
                 if useSystemGlass {
                     // Always drawn as in a key window: the launcher can be on screen while
                     // another app is active (opened by the hot corner or MCP), and inactive
                     // glass goes flat and dark.
-                    // Clear glass: see-through, bending what is behind it.
-                    Color.clear.glassEffect(.clear, in: shape)
+                    Color.clear.glassEffect(.clear.tint(.white.opacity(0.24 * tint)), in: shape)
                         .environment(\.controlActiveState, .key)
                         .environment(\.colorScheme, .light)
                 } else {
                     backdrop(frame: frame)
                 }
                 // Lift: glass brightens what is behind it, more toward the light.
-                LinearGradient(colors: useSystemGlass ? [.white.opacity(0.06), .white.opacity(0.0)]
+                LinearGradient(colors: useSystemGlass ? [.white.opacity(0.06 + 0.16 * tint), .white.opacity(0.10 * tint)]
                                                       : [.white.opacity(0.30), .white.opacity(0.20)],
                                startPoint: UnitPoint(x: 0.5 + light.direction.dx * 0.5, y: 0.5 + light.direction.dy * 0.5),
                                endPoint: UnitPoint(x: 0.5 - light.direction.dx * 0.5, y: 0.5 - light.direction.dy * 0.5))
                 if useSystemGlass {
                     // Specular edges, lit from above the screen; they swing with drag speed.
                     shape.strokeBorder(AngularGradient(stops: light.rimStops, center: .center),
-                                       lineWidth: max(1.5, geo.size.width * 0.022))
+                                       lineWidth: max(1.5, e * 0.022))
                         .blendMode(.plusLighter)
                     // Lensing glow just inside the edge: light bent by the thick rim.
-                    shape.inset(by: geo.size.width * 0.035)
-                        .stroke(AngularGradient(stops: light.rimStops, center: .center), lineWidth: geo.size.width * 0.06)
-                        .blur(radius: geo.size.width * 0.035)
+                    shape.inset(by: e * 0.035)
+                        .stroke(AngularGradient(stops: light.rimStops, center: .center), lineWidth: e * 0.06)
+                        .blur(radius: e * 0.035)
                         .opacity(0.55)
                         .blendMode(.plusLighter)
                 } else {

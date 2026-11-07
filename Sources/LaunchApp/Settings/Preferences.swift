@@ -121,6 +121,8 @@ struct Settings: Codable, Equatable {
     var animationSpeed: Double = 1.0
     var showPageDots = true
     var liquidGlass = true
+    var glassFollowsSystem = true
+    var glassTint: Double = 0      // 0 clear … 1 tinted, when not following the system
     var pageTransition: PageTransition = .slide
     var folderColumns = 6
     var folderRows = 3
@@ -168,6 +170,8 @@ struct Settings: Codable, Equatable {
         animationSpeed = v(.animationSpeed, d.animationSpeed)
         showPageDots = v(.showPageDots, d.showPageDots)
         liquidGlass = v(.liquidGlass, d.liquidGlass)
+        glassFollowsSystem = v(.glassFollowsSystem, d.glassFollowsSystem)
+        glassTint = v(.glassTint, d.glassTint)
         pageTransition = v(.pageTransition, d.pageTransition)
         folderColumns = v(.folderColumns, d.folderColumns)
         folderRows = v(.folderRows, d.folderRows)
