@@ -117,6 +117,11 @@ struct AppearancePane: View {
             Picker("Scrolling", selection: $prefs.settings.scrollMode) {
                 ForEach(ScrollMode.allCases) { Text($0.title).tag($0) }
             }
+            if prefs.settings.scrollMode == .paged {
+                Picker("Page transition", selection: $prefs.settings.pageTransition) {
+                    ForEach(PageTransition.allCases) { Text($0.title).tag($0) }
+                }
+            }
             Picker("Preset", selection: Binding<LayoutPreset?>(
                 get: { LayoutPreset.matching(prefs.settings) },
                 set: { if let p = $0 { p.apply(to: &prefs.settings) } })) {
@@ -136,6 +141,7 @@ struct AppearancePane: View {
                 slider("Name size", value: $prefs.settings.labelSize, range: 10...18, format: { "\(Int($0)) pt" })
             }
             Toggle("Show page dots", isOn: $prefs.settings.showPageDots)
+            Toggle("Liquid Glass folders", isOn: $prefs.settings.liquidGlass)
         }
         Section("Background") {
             Picker("Style", selection: $prefs.settings.background) {
@@ -153,6 +159,7 @@ struct AppearancePane: View {
                 s.scrollMode = d.scrollMode; s.displayMode = d.displayMode; s.windowScale = d.windowScale
                 s.animationSpeed = d.animationSpeed; s.showPageDots = d.showPageDots
                 s.folderColumns = d.folderColumns; s.folderRows = d.folderRows
+                s.liquidGlass = d.liquidGlass; s.pageTransition = d.pageTransition
                 prefs.settings = s
             }
         }

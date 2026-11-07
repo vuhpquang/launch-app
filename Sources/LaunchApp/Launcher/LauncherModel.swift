@@ -56,6 +56,8 @@ struct DragState {
     var mergeCandidate: String?
     var mergeSince: Date?
     var lastMove = Date.distantPast
+    var pendingTarget: Int?           // gap slot under the dragged icon, waiting to settle
+    var pendingSince: Date?
     var velocity: CGSize = .zero      // points/s, smoothed — tilts the glass while dragging
     var lastUpdate = Date()
 }
@@ -392,8 +394,8 @@ final class LauncherModel: ObservableObject {
     }
 
     /// Page slides: a calm ease-out with no overshoot (bounce made icons jiggle at the end).
-    func pageAnimation() -> Animation {
-        .spring(duration: 0.62 / max(0.25, settings.animationSpeed), bounce: 0)
+    func pageAnimation() -> Animation? {
+        settings.pageTransition == .none ? nil : .spring(duration: 0.62 / max(0.25, settings.animationSpeed), bounce: 0)
     }
 
     func goToPage(_ p: Int) {

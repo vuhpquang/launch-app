@@ -272,7 +272,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.center()
             settingsWindow = w
         }
-        NSApp.setActivationPolicy(.regular)   // a normal window while Settings is open
+        // Stays a background (UI element) app even with Settings open, unless the user
+        // chose to be in ⌘Tab.
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate()
         NotificationCenter.default.addObserver(self, selector: #selector(settingsClosed),

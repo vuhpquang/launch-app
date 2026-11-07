@@ -137,6 +137,24 @@ final class InteractionTests: XCTestCase {
         XCTAssertTrue(model.prefs.settings.hiddenApps.contains("c"))
     }
 
+    func testIconsOnlyMakeRoomInGapsNotOverAnotherIcon() {
+        // Drag "a" so its icon partly covers "c" (not its centre): nothing moves out of the way.
+        let s = model.metrics.iconSize
+        model.mouseDown(at: center(0), modifiers: [], clickCount: 1)
+        model.mouseDragged(to: CGPoint(x: center(0).x + 20, y: center(0).y))
+        let near = CGPoint(x: center(2).x - s * 0.4, y: center(2).y + s * 0.1)
+        model.mouseDragged(to: near)
+        Thread.sleep(forTimeInterval: 0.12)
+        model.mouseDragged(to: CGPoint(x: near.x + 1, y: near.y))
+        XCTAssertEqual(ids[0], ["a", "b", "c", "d", "e", "f", "g", "h"])
+        // Resting there makes it a folder target.
+        Thread.sleep(forTimeInterval: 0.3)
+        model.mouseDragged(to: CGPoint(x: near.x + 2, y: near.y))
+        XCTAssertEqual(model.mergeTargetID, "c")
+        model.mouseUp(at: near, modifiers: [])
+        XCTAssertEqual(model.layout.allItems.first { $0.isFolder }?.folder?.apps, ["c", "a"])
+    }
+
     func testMouseWheelUpDownFlipsPages() {
         // Classic wheel: one notch down → next page.
         model.scrollWheel(dx: 0, dy: -1, precise: false, phase: [], momentum: [])

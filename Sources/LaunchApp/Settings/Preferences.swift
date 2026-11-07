@@ -29,6 +29,23 @@ enum DisplayMode: String, Codable, CaseIterable, Identifiable {
     var title: String { self == .fullScreen ? "Full Screen" : "Window" }
 }
 
+/// How one page gives way to the next.
+enum PageTransition: String, Codable, CaseIterable, Identifiable {
+    case slide, parallax, fade, zoom, cube, cards, none
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .slide: return "Slide"
+        case .parallax: return "Parallax"
+        case .fade: return "Fade"
+        case .zoom: return "Zoom"
+        case .cube: return "Cube"
+        case .cards: return "Cards"
+        case .none: return "None"
+        }
+    }
+}
+
 enum HotCorner: String, Codable, CaseIterable, Identifiable {
     case none, topLeft, topRight, bottomLeft, bottomRight
     var id: String { rawValue }
@@ -103,6 +120,8 @@ struct Settings: Codable, Equatable {
     var windowScale: Double = 0.72
     var animationSpeed: Double = 1.0
     var showPageDots = true
+    var liquidGlass = true
+    var pageTransition: PageTransition = .slide
     var folderColumns = 6
     var folderRows = 3
 
@@ -148,6 +167,8 @@ struct Settings: Codable, Equatable {
         windowScale = v(.windowScale, d.windowScale)
         animationSpeed = v(.animationSpeed, d.animationSpeed)
         showPageDots = v(.showPageDots, d.showPageDots)
+        liquidGlass = v(.liquidGlass, d.liquidGlass)
+        pageTransition = v(.pageTransition, d.pageTransition)
         folderColumns = v(.folderColumns, d.folderColumns)
         folderRows = v(.folderRows, d.folderRows)
         hiddenApps = v(.hiddenApps, d.hiddenApps)

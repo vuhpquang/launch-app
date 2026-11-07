@@ -20,6 +20,8 @@
 	<string>6</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
+	<key>LSUIElement</key>
+	<true/>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>NSAccessibilityUsageDescription</key>

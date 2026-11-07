@@ -146,7 +146,10 @@ extension LauncherModel {
             case .item(let id, let slot, let inFolder) where !isSearching && !press.modifiers.contains(.command):
                 press.mode = .item
                 input.press = press
-                beginItemDrag(id: id, slot: slot, inFolder: inFolder, at: p)
+                // Grab offset from where the press began, so the icon stays under the finger.
+                beginItemDrag(id: id, slot: slot, inFolder: inFolder, at: press.start)
+                updateItemDrag(to: p)
+                return
             case .item(let id, _, _) where isSearching:
                 // Search results can still go to the Dock.
                 if let app = apps[id] { host?.beginDockDrag(app: app) }
@@ -444,48 +447,72 @@ extension LauncherModel {
             if p.y > g.maxY - 24 { scrollY = min(metrics.maxScrollY(count: count), scrollY + 14) }
         }
 
-        // Hovering over another app's centre → make (or add to) a folder.
+        // What the dragged icon (not the pointer) is over. Its body has to actually cover
+        // another icon before anything happens there:
+        //  - apps dropped on an icon make / join a folder (after a short rest);
+        //  - a folder resting on an icon takes its place;
+        //  - icons only make room when the dragged icon is in the gap between them.
+        let iconCenter = CGPoint(x: p.x - d.grab.width, y: p.y - d.grab.height)
         let draggingOnlyApps = d.ids.allSatisfy { d.original.item(id: $0)?.isFolder != true }
-        var candidate: String?
-        if draggingOnlyApps {
-            for (item, slot) in visibleSlots where !d.ids.contains(item.id) {
-                let c = onScreenCenter(slot: slot)
-                if hypot(p.x - c.x, p.y - c.y) < metrics.iconSize * 0.3 { candidate = item.id; break }
-            }
+        var over: (id: String, slot: Int)?
+        for (item, slot) in visibleSlots where !d.ids.contains(item.id) {
+            let c = onScreenCenter(slot: slot)
+            if hypot(iconCenter.x - c.x, iconCenter.y - c.y) < metrics.iconSize * 0.5 { over = (item.id, slot); break }
         }
-        if let candidate {
-            if d.mergeCandidate != candidate {
-                d.mergeCandidate = candidate
+        if let over {
+            if d.mergeCandidate != over.id {
+                d.mergeCandidate = over.id
                 d.mergeSince = now
-            } else if let since = d.mergeSince, now.timeIntervalSince(since) > 0.28, mergeTargetID != candidate {
-                withAnimation(anim(0.25)) { mergeTargetID = candidate }
             }
+            let rested = now.timeIntervalSince(d.mergeSince ?? now)
+            // An icon that just slid under the pointer isn't a target yet.
+            let settled = now.timeIntervalSince(d.lastMove) > 0.3
+            if draggingOnlyApps {
+                if rested > 0.22, settled, mergeTargetID != over.id {
+                    withAnimation(anim(0.25)) { mergeTargetID = over.id }
+                }
+            } else if rested > 0.45, settled {
+                moveDragTarget(&d, slot: over.slot, now: now)
+                d.mergeCandidate = nil
+            }
+            d.pendingTarget = nil
             drag = d
             return
         }
         d.mergeCandidate = nil
         if mergeTargetID != nil { withAnimation(anim(0.25)) { mergeTargetID = nil } }
 
-        // Otherwise make room where the pointer is.
+        // In a gap: make room there once the spot has been held briefly.
+        let slot = isVertical ? metrics.verticalSlot(at: iconCenter, scrollY: scrollY) : metrics.nearestSlot(to: iconCenter)
+        if d.pendingTarget != slot {
+            d.pendingTarget = slot
+            d.pendingSince = now
+        } else if let since = d.pendingSince, now.timeIntervalSince(since) > 0.08 {
+            moveDragTarget(&d, slot: slot, now: now)
+        }
+        drag = d
+    }
+
+    private func moveDragTarget(_ d: inout DragState, slot: Int, now: Date) {
         let target: ItemPosition
         if isVertical {
-            let flat = metrics.verticalSlot(at: p, scrollY: scrollY)
-            target = d.base.position(forFlatIndex: min(flat, d.base.allItems.count))
+            target = d.base.position(forFlatIndex: min(slot, d.base.allItems.count))
         } else {
             let count = page < d.base.pages.count ? d.base.pages[page].count : 0
-            target = ItemPosition(page: page, index: min(metrics.nearestSlot(to: p), count))
+            target = ItemPosition(page: page, index: min(slot, count))
         }
-        if target != d.target, now.timeIntervalSince(d.lastMove) > 0.06 {
-            d.target = target
-            d.lastMove = now
-            drag = d
-            applyMainPreview()
-        } else {
-            drag = d
-        }
+        guard target != d.target else { return }
+        d.target = target
+        d.lastMove = now
+        drag = d
+        applyMainPreview()
     }
 
     func endItemDrag() {
+        // Dropped in a gap before the spot settled: still put it there.
+        if var pending = drag, pending.fromFolder == nil, mergeTargetID == nil, let slot = pending.pendingTarget {
+            moveDragTarget(&pending, slot: slot, now: Date())
+        }
         guard let d = drag else { return }
         let primary = d.ids[0]
         withAnimation(anim(0.35)) {

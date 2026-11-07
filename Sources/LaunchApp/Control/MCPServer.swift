@@ -192,7 +192,8 @@ enum MCPServer {
          Change settings by key, e.g. {"columns": 8, "rows": 6, "iconScale": 0.85, "showLabels": true, \
          "background": "wallpaper|glass|dark", "backgroundDim": 0.3, "scrollMode": "paged|vertical", \
          "displayMode": "fullScreen|window", "hotCorner": "none|topLeft|topRight|bottomLeft|bottomRight", \
-         "folderColumns": 6, "folderRows": 3, "closeAfterLaunch": true}. Use get_settings for all keys. Values are clamped to valid ranges.
+         "folderColumns": 6, "folderRows": 3, "closeAfterLaunch": true, "liquidGlass": true, \
+         "pageTransition": "slide|parallax|fade|zoom|cube|cards|none", "showInAppSwitcher": false}. Use get_settings for all keys. Values are clamped to valid ranges.
          """,
          "inputSchema": obj(["settings": ["type": "object"]], required: ["settings"])],
         ["name": "apply_layout_preset", "title": "Apply layout preset",

@@ -145,24 +145,31 @@ struct GridLayer: View {
                 ], startPoint: .top, endPoint: .bottom)
             )
         } else {
-            // Two pages each side, so the pages a slide passes through are already there;
-            // pages entering/leaving the window appear without a transition (off screen),
-            // only the strip as a whole moves.
+            // Two pages each side, so the pages a transition passes through are already
+            // there; pages entering/leaving this window appear without a transition (they
+            // are off screen or invisible), only the pages themselves animate.
             let visible = max(0, model.page - 2)...max(0, min(pages.count - 1, model.page + 2))
+            let style = model.settings.pageTransition
             ZStack(alignment: .topLeading) {
                 ForEach(visible, id: \.self) { p in
                     if p < pages.count {
-                        ForEach(Array(pages[p].enumerated()), id: \.element.id) { index, item in
-                            let c = metrics.iconCenter(slot: index)
-                            tile(item, dragged: dragged, keyboardID: keyboardID, selected: selected)
-                                .position(x: c.x + CGFloat(p) * width, y: c.y)
-                                .transition(.identity)
+                        ZStack(alignment: .topLeading) {
+                            ForEach(Array(pages[p].enumerated()), id: \.element.id) { index, item in
+                                let c = metrics.iconCenter(slot: index)
+                                tile(item, dragged: dragged, keyboardID: keyboardID, selected: selected)
+                                    .position(x: c.x, y: c.y)
+                                    .transition(.identity)
+                            }
                         }
+                        .frame(width: width, height: model.size.height, alignment: .topLeading)
+                        .modifier(PageTransitionEffect(style: style,
+                                                       rel: CGFloat(p - model.page) - model.pageOffset / max(1, width),
+                                                       width: width))
+                        .transition(.identity)
                     }
                 }
             }
             .frame(width: width, height: model.size.height, alignment: .topLeading)
-            .offset(x: -CGFloat(model.page) * width + model.pageOffset)
         }
     }
 
@@ -174,6 +181,51 @@ struct GridLayer: View {
                  mergeTarget: model.mergeTargetID == item.id,
                  showDelete: model.isEditing && model.canUninstall(item))
             .opacity(dragged.contains(item.id) ? 0 : 1)
+    }
+}
+
+/// Places one page for a transition. `rel` is the page's position relative to the one
+/// being shown (0 = on screen, 1 = next, -1 = previous, fractional mid-swipe); SwiftUI
+/// interpolates the resulting offset/opacity/scale/rotation when the page changes.
+struct PageTransitionEffect: ViewModifier {
+    let style: PageTransition
+    let rel: CGFloat
+    let width: CGFloat
+
+    func body(content: Content) -> some View {
+        let r = max(-2, min(2, rel))
+        let a = abs(r)
+        switch style {
+        case .slide, .none:
+            content.offset(x: r * width)
+        case .parallax:
+            // The outgoing page drifts slowly and dims; the incoming one slides over it.
+            content
+                .offset(x: r > 0 ? r * width : r * width * 0.3)
+                .opacity(r < 0 ? max(0, 1 + Double(r) * 0.9) : 1)
+                .zIndex(Double(r))
+        case .fade:
+            content
+                .opacity(max(0, 1 - Double(a) * 1.4))
+                .offset(x: r * 40)
+        case .zoom:
+            content
+                .scaleEffect(1 + r * 0.12)
+                .opacity(max(0, 1 - Double(a) * 1.3))
+        case .cube:
+            content
+                .rotation3DEffect(.degrees(Double(r) * -60), axis: (x: 0, y: 1, z: 0),
+                                  anchor: r > 0 ? .leading : .trailing, perspective: 0.45)
+                .offset(x: r * width)
+                .opacity(max(0, 1 - Double(a) * 0.6))
+        case .cards:
+            // Pages stack like cards: the next one rises from below and scales up.
+            content
+                .scaleEffect(r > 0 ? 1 - r * 0.08 : 1 + r * 0.04)
+                .offset(x: r < 0 ? r * width : 0, y: r > 0 ? r * 60 : 0)
+                .opacity(r > 0 ? max(0, 1 - Double(r) * 1.2) : 1)
+                .zIndex(-Double(r))
+        }
     }
 }
 
@@ -574,6 +626,9 @@ struct LiquidGlassTile: View {
     @ObservedObject var model: LauncherModel
     let cornerRadius: CGFloat
     var tilt: CGSize = .zero
+    /// On: the system's Liquid Glass (refracts the wallpaper and icons behind it) with
+    /// specular edges. Off: a plain frosted pane.
+    var useSystemGlass: Bool { model.settings.liquidGlass }
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -581,16 +636,24 @@ struct LiquidGlassTile: View {
             let frame = geo.frame(in: .global)
             let light = GlassLight(frame: frame, screen: model.size, tilt: tilt)
             ZStack(alignment: .topLeading) {
-                backdrop(frame: frame)
+                if useSystemGlass {
+                    Color.clear.glassEffect(.clear, in: shape)
+                } else {
+                    backdrop(frame: frame)
+                }
                 // Lift: glass brightens what is behind it, more toward the light.
-                LinearGradient(colors: [.white.opacity(0.36), .white.opacity(0.22)],
+                LinearGradient(colors: useSystemGlass ? [.white.opacity(0.16), .white.opacity(0.06)]
+                                                      : [.white.opacity(0.30), .white.opacity(0.20)],
                                startPoint: UnitPoint(x: 0.5 + light.direction.dx * 0.5, y: 0.5 + light.direction.dy * 0.5),
                                endPoint: UnitPoint(x: 0.5 - light.direction.dx * 0.5, y: 0.5 - light.direction.dy * 0.5))
-                // Specular edges.
-                shape.strokeBorder(AngularGradient(stops: light.rimStops, center: .center),
-                                   lineWidth: max(1.2, geo.size.width * 0.016))
-                shape.inset(by: max(1.5, geo.size.width * 0.02))
-                    .stroke(.white.opacity(0.10), lineWidth: 1)
+                if useSystemGlass {
+                    // Specular edges, lit from above the screen; they swing with drag speed.
+                    shape.strokeBorder(AngularGradient(stops: light.rimStops, center: .center),
+                                       lineWidth: max(1.2, geo.size.width * 0.016))
+                        .blendMode(.plusLighter)
+                } else {
+                    shape.strokeBorder(.white.opacity(0.22), lineWidth: 0.8)
+                }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
             .clipShape(shape)
