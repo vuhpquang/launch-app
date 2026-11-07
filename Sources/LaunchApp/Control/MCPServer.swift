@@ -71,7 +71,8 @@ enum MCPServer {
 
     /// Starts LaunchApp in the background (no launcher on screen) and waits for its socket.
     private static func ensureAppRunning() throws {
-        if (try? ControlSocket.send("status", [:], timeout: 3)) != nil { return }
+        if appsLoaded() { return }
+        if (try? ControlSocket.send("status", [:], timeout: 3)) != nil { try waitForApps(); return }
         let bundle = Bundle.main.bundleURL
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
@@ -82,9 +83,20 @@ enum MCPServer {
         p.waitUntilExit()
         for _ in 0..<60 {
             usleep(200_000)
-            if (try? ControlSocket.send("status", [:], timeout: 3)) != nil { return }
+            if (try? ControlSocket.send("status", [:], timeout: 3)) != nil { try waitForApps(); return }
         }
         throw ControlError("couldn't start LaunchApp")
+    }
+
+    /// True once the app has scanned the app folders (right after launch it knows none).
+    private static func appsLoaded() -> Bool {
+        guard let r = try? ControlSocket.send("status", [:], timeout: 3),
+              let s = r["result"] as? [String: Any], let n = s["apps"] as? Int else { return false }
+        return n > 0
+    }
+
+    private static func waitForApps() throws {
+        for _ in 0..<75 where !appsLoaded() { usleep(200_000) }
     }
 
     private static func reply(_ id: Any, _ result: Any) {
