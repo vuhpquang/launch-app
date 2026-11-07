@@ -145,7 +145,10 @@ struct GridLayer: View {
                 ], startPoint: .top, endPoint: .bottom)
             )
         } else {
-            let visible = max(0, model.page - 1)...max(0, min(pages.count - 1, model.page + 1))
+            // Two pages each side, so the pages a slide passes through are already there;
+            // pages entering/leaving the window appear without a transition (off screen),
+            // only the strip as a whole moves.
+            let visible = max(0, model.page - 2)...max(0, min(pages.count - 1, model.page + 2))
             ZStack(alignment: .topLeading) {
                 ForEach(visible, id: \.self) { p in
                     if p < pages.count {
@@ -153,6 +156,7 @@ struct GridLayer: View {
                             let c = metrics.iconCenter(slot: index)
                             tile(item, dragged: dragged, keyboardID: keyboardID, selected: selected)
                                 .position(x: c.x + CGFloat(p) * width, y: c.y)
+                                .transition(.identity)
                         }
                     }
                 }
@@ -279,8 +283,12 @@ struct Wiggle: ViewModifier {
         if active {
             TimelineView(.animation) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
-                let phase = Double(abs(seed % 1000)) / 1000 * .pi * 2
-                content.rotationEffect(.degrees(sin(t * 2 * .pi * 3.2 + phase) * 1.8))
+                let r = Double(abs(seed % 997)) / 997
+                let phase = r * .pi * 2
+                let rate = 2 * .pi * (2.1 + r * 0.5)     // ~2.1–2.6 Hz, each icon its own
+                content
+                    .rotationEffect(.degrees(sin(t * rate + phase) * 1.1))
+                    .offset(y: cos(t * rate * 0.5 + phase) * 0.4)
             }
         } else {
             content
@@ -295,11 +303,11 @@ struct FolderIcon: View {
     var tilt: CGSize = .zero
 
     var body: some View {
-        let inner = size * 0.205
-        let gap = size * 0.06
+        let inner = size * 0.232
+        let gap = size * 0.046
         let shown = Array(folder.apps.prefix(9))
         ZStack {
-            LiquidGlassTile(screen: model.size, cornerRadius: size * 0.235 * 0.86, tilt: tilt)
+            LiquidGlassTile(model: model, cornerRadius: size * 0.235 * 0.86, tilt: tilt)
                 .frame(width: size * 0.86, height: size * 0.86)
             VStack(spacing: gap) {
                 ForEach(0..<3, id: \.self) { row in
@@ -331,11 +339,8 @@ struct DraggedIcon: View {
         let m = model.metrics
         ZStack(alignment: .topTrailing) {
             IconTile(model: model, item: item, metrics: m, tilt: tilt)
-                .scaleEffect(1.08)
-                // Lean into the motion, like a glass pane being pushed.
-                .rotation3DEffect(.degrees(Double(max(-14, min(14, tilt.width / 90)))), axis: (x: 0, y: 1, z: 0), perspective: 0.6)
-                .rotation3DEffect(.degrees(Double(max(-14, min(14, -tilt.height / 90)))), axis: (x: 1, y: 0, z: 0), perspective: 0.6)
-                .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+                .scaleEffect(1.1)
+                .shadow(color: .black.opacity(0.28), radius: 10, y: 5)
             if count > 1 {
                 Text("\(count)")
                     .font(.system(size: 13, weight: .bold))
@@ -558,37 +563,53 @@ struct DialogView: View {
 
 // MARK: - Liquid Glass
 
-/// A folder tile made of Liquid Glass: the system glass material, plus a rim light and a
-/// soft specular sheen lit from a light above the screen. Both follow where the tile is on
-/// screen and lean with `tilt` (drag velocity), so the light slides across the glass as the
-/// folder is dragged around.
+/// A folder tile in the style of macOS 26's Liquid Glass folders: a pane that shows the
+/// (already blurred) wallpaper right behind it, lifted and brightened, with specular light
+/// on the edge facing a light above the screen and a softer one on the opposite edge.
+///
+/// The "see-through" is drawn from the launcher's own background image, aligned to where
+/// the tile is on screen — so it stays correct while the tile is dragged, scaled or
+/// wiggling (the system glass material samples badly inside moving layers and turns dark).
 struct LiquidGlassTile: View {
-    let screen: CGSize
+    @ObservedObject var model: LauncherModel
     let cornerRadius: CGFloat
     var tilt: CGSize = .zero
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         GeometryReader { geo in
-            let light = GlassLight(frame: geo.frame(in: .global), screen: screen, tilt: tilt)
-            ZStack {
-                shape.fill(.white.opacity(0.07))
-                    .glassEffect(.regular.tint(.white.opacity(0.05)), in: shape)
-                // Specular sheen: a soft bright spot on the side facing the light.
-                Ellipse()
-                    .fill(RadialGradient(colors: [.white.opacity(0.28 * light.intensity), .white.opacity(0)],
-                                         center: .center, startRadius: 0, endRadius: geo.size.width * 0.55))
-                    .frame(width: geo.size.width * 1.1, height: geo.size.height * 0.75)
-                    .offset(x: light.direction.dx * geo.size.width * 0.38, y: light.direction.dy * geo.size.height * 0.42)
-                    .blendMode(.plusLighter)
-                    .clipShape(shape)
-                // Rim light: brightest on the edge facing the light, a faint bounce opposite.
-                shape.strokeBorder(
-                    AngularGradient(stops: light.rimStops, center: .center),
-                    lineWidth: max(1, geo.size.width * 0.018))
-                    .blendMode(.plusLighter)
-                shape.strokeBorder(.white.opacity(0.10), lineWidth: 0.6)
+            let frame = geo.frame(in: .global)
+            let light = GlassLight(frame: frame, screen: model.size, tilt: tilt)
+            ZStack(alignment: .topLeading) {
+                backdrop(frame: frame)
+                // Lift: glass brightens what is behind it, more toward the light.
+                LinearGradient(colors: [.white.opacity(0.36), .white.opacity(0.22)],
+                               startPoint: UnitPoint(x: 0.5 + light.direction.dx * 0.5, y: 0.5 + light.direction.dy * 0.5),
+                               endPoint: UnitPoint(x: 0.5 - light.direction.dx * 0.5, y: 0.5 - light.direction.dy * 0.5))
+                // Specular edges.
+                shape.strokeBorder(AngularGradient(stops: light.rimStops, center: .center),
+                                   lineWidth: max(1.2, geo.size.width * 0.016))
+                shape.inset(by: max(1.5, geo.size.width * 0.02))
+                    .stroke(.white.opacity(0.10), lineWidth: 1)
             }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+            .clipShape(shape)
+            .shadow(color: .black.opacity(0.18), radius: 4, y: 1.5)
+        }
+    }
+
+    @ViewBuilder
+    private func backdrop(frame: CGRect) -> some View {
+        if model.settings.background == .wallpaper, let image = model.backgroundImage {
+            Image(decorative: image, scale: 1)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: model.size.width, height: model.size.height)
+                .offset(x: -frame.minX, y: -frame.minY)
+                .frame(width: frame.width, height: frame.height, alignment: .topLeading)
+                .saturation(1.15)
+        } else {
+            Color.white.opacity(0.10)
         }
     }
 }
@@ -641,9 +662,9 @@ struct GlassLight {
         func dist(_ x: Double, _ y: Double) -> Double { let d = abs(x - y).truncatingRemainder(dividingBy: 1); return min(d, 1 - d) }
         return (0...48).map { i in
             let t = Double(i) / 48
-            let lobe = 0.85 * intensity * exp(-pow(dist(t, a) / 0.075, 2))
-            let bounce = 0.22 * intensity * exp(-pow(dist(t, a + 0.5) / 0.1, 2))
-            return Gradient.Stop(color: .white.opacity(min(1, 0.04 + lobe + bounce)), location: t)
+            let lobe = 0.9 * intensity * exp(-pow(dist(t, a) / 0.11, 2))
+            let bounce = 0.5 * intensity * exp(-pow(dist(t, a + 0.5) / 0.1, 2))
+            return Gradient.Stop(color: .white.opacity(min(1, 0.14 + lobe + bounce)), location: t)
         }
     }
 }

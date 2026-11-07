@@ -73,6 +73,9 @@ enum LayoutPreset: String, CaseIterable, Identifiable {
 struct Settings: Codable, Equatable {
     // General
     var showInDock = true
+    /// Off (default): LaunchApp stays out of ⌘Tab, like Launchpad; the Dock icon is a pinned
+    /// tile. On: a regular app (in ⌘Tab, with the app list in its Dock menu).
+    var showInAppSwitcher = false
     var showMenuBarIcon = true
     var closeAfterLaunch = true
     var showAppsInDockMenu = true
@@ -121,6 +124,7 @@ struct Settings: Codable, Equatable {
             (try? c.decodeIfPresent(T.self, forKey: key)) ?? fallback
         }
         showInDock = v(.showInDock, d.showInDock)
+        showInAppSwitcher = v(.showInAppSwitcher, d.showInAppSwitcher)
         showMenuBarIcon = v(.showMenuBarIcon, d.showMenuBarIcon)
         closeAfterLaunch = v(.closeAfterLaunch, d.closeAfterLaunch)
         showAppsInDockMenu = v(.showAppsInDockMenu, d.showAppsInDockMenu)
@@ -175,6 +179,11 @@ final class Preferences: ObservableObject {
 
     private func save() {
         if let data = try? JSONEncoder().encode(settings) { defaults.set(data, forKey: Self.key) }
+    }
+
+    /// Regular (⌘Tab + Dock menu) or accessory (neither; the Dock shows a pinned tile).
+    var activationPolicy: NSApplication.ActivationPolicy {
+        settings.showInAppSwitcher ? .regular : .accessory
     }
 
     var appSources: [URL] { AppSources.expanded(AppSources.defaults + settings.extraSources) }

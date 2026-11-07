@@ -129,8 +129,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let old = lastSettings
         lastSettings = s
 
-        let policy: NSApplication.ActivationPolicy = s.showInDock ? .regular : .accessory
+        let policy = prefs.activationPolicy
         if NSApp.activationPolicy() != policy, settingsWindow?.isVisible != true { NSApp.setActivationPolicy(policy) }
+        if old?.showInDock != s.showInDock { syncDockTile(show: s.showInDock, firstApply: old == nil) }
 
         if s.showMenuBarIcon { installStatusItem() } else { removeStatusItem() }
 
@@ -271,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.center()
             settingsWindow = w
         }
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(.regular)   // a normal window while Settings is open
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate()
         NotificationCenter.default.addObserver(self, selector: #selector(settingsClosed),
@@ -279,8 +280,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func settingsClosed() {
-        if !prefs.settings.showInDock {
-            DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
+        let policy = prefs.activationPolicy
+        if policy != .regular { DispatchQueue.main.async { NSApp.setActivationPolicy(policy) } }
+    }
+
+    /// Outside ⌘Tab the app has no Dock icon of its own while running, so "Show in Dock" keeps
+    /// a pinned tile instead (clicking it sends a reopen, which toggles the launcher).
+    private func syncDockTile(show: Bool, firstApply: Bool) {
+        let url = Bundle.main.bundleURL
+        guard url.pathExtension == "app", url.path.hasPrefix("/Applications/") else { return }
+        let me = AppInfo(id: "com.vuhpquang.launchapp", url: url, name: "LaunchApp",
+                         bundleID: Bundle.main.bundleIdentifier, isSystem: false, isUtility: false)
+        let inDock = AppActions.isInDock(me)
+        if show, !inDock {
+            AppActions.addToDock(me)
+        } else if !show, inDock, !firstApply {
+            AppActions.removeFromDock(me)
         }
     }
 
@@ -330,6 +345,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "folder":
             if let f = model.layout.pages[model.page].first(where: \.isFolder) { model.openFolder(f.id) }
         case "edit": model.editing = true
+        case "drag":   // a folder held over the grid, for checking the glass while dragging
+            let items = model.layout.pages[0]
+            if let i = items.firstIndex(where: \.isFolder) {
+                let c = model.metrics.iconCenter(slot: min(items.count - 1, i + 9))
+                model.mouseDown(at: model.metrics.iconCenter(slot: i), modifiers: [], clickCount: 1)
+                model.mouseDragged(to: CGPoint(x: model.metrics.iconCenter(slot: i).x + 30, y: model.metrics.iconCenter(slot: i).y))
+                model.mouseDragged(to: CGPoint(x: c.x + 40, y: c.y + 25))
+            }
         case "page": model.goToPage(Int(parts.count > 1 ? parts[1] : "1") ?? 1)
         case "settings": showSettings(pane: SettingsPane(rawValue: parts.count > 1 ? parts[1] : "general") ?? .general)
         default: break

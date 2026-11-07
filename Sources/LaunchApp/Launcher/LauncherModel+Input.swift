@@ -242,7 +242,7 @@ extension LauncherModel {
         if pageOffset < -threshold || velocity < -12 { target = page + 1 }
         if pageOffset > threshold || velocity > 12 { target = page - 1 }
         target = min(max(0, target), pageCount - 1)
-        withAnimation(anim(0.45)) {
+        withAnimation(pageAnimation()) {
             page = target
             pageOffset = 0
         }
@@ -299,7 +299,7 @@ extension LauncherModel {
         let d = abs(dx) >= abs(dy) ? dx : dy
         input.wheelAccum += d
         let threshold: CGFloat = precise ? 40 : 1
-        guard abs(input.wheelAccum) >= threshold, Date().timeIntervalSince(input.lastWheelFlip) > 0.35 else { return }
+        guard abs(input.wheelAccum) >= threshold, Date().timeIntervalSince(input.lastWheelFlip) > 0.5 else { return }
         flip(input.wheelAccum > 0 ? -1 : 1)
         input.wheelAccum = 0
         input.lastWheelFlip = Date()
@@ -427,7 +427,7 @@ extension LauncherModel {
                         let count = next < d.base.pages.count ? d.base.pages[next].count : 0
                         d.target = ItemPosition(page: next, index: count)
                         drag = d
-                        withAnimation(anim(0.45)) { page = next }
+                        withAnimation(pageAnimation()) { page = next }
                         applyMainPreview()
                         return
                     }

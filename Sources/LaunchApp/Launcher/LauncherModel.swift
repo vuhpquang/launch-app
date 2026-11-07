@@ -391,9 +391,14 @@ final class LauncherModel: ObservableObject {
         scheduleSave()
     }
 
+    /// Page slides: a calm ease-out with no overshoot (bounce made icons jiggle at the end).
+    func pageAnimation() -> Animation {
+        .spring(duration: 0.62 / max(0.25, settings.animationSpeed), bounce: 0)
+    }
+
     func goToPage(_ p: Int) {
         let target = min(max(0, p), pageCount - 1)
-        withAnimation(anim(0.45)) {
+        withAnimation(pageAnimation()) {
             page = target
             pageOffset = 0
         }

@@ -76,11 +76,12 @@ struct GeneralPane: View {
             }))
             if let loginError { Text(loginError).font(.caption).foregroundStyle(.red) }
             Toggle("Show in Dock", isOn: $prefs.settings.showInDock)
+            Toggle("Show in App Switcher (⌘Tab)", isOn: $prefs.settings.showInAppSwitcher)
             Toggle("Show apps in the Dock icon's menu", isOn: $prefs.settings.showAppsInDockMenu)
-                .disabled(!prefs.settings.showInDock)
+                .disabled(!prefs.settings.showInDock || !prefs.settings.showInAppSwitcher)
             Toggle("Show menu bar icon", isOn: $prefs.settings.showMenuBarIcon)
         } footer: {
-            Text("Click LaunchApp in the Dock to open or close it, like Launchpad. Right-click it to open any app from its menu.")
+            Text("Click LaunchApp in the Dock to open or close it, like Launchpad. The app list in the Dock icon's menu needs App Switcher on (macOS only asks apps in ⌘Tab for a Dock menu).")
                 .font(.caption).foregroundStyle(.secondary)
         }
         Section {
