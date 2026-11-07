@@ -637,7 +637,14 @@ struct LiquidGlassTile: View {
             let light = GlassLight(frame: frame, screen: model.size, tilt: tilt)
             ZStack(alignment: .topLeading) {
                 if useSystemGlass {
-                    Color.clear.glassEffect(.clear, in: shape)
+                    // Always drawn as in a key window: the launcher can be on screen while
+                    // another app is active (opened by the hot corner or MCP), and inactive
+                    // glass goes flat and dark.
+                    // Frosted, light glass like macOS 26's folders (clear glass vanishes over
+                    // dark wallpapers).
+                    Color.clear.glassEffect(.regular.tint(.white.opacity(0.18)), in: shape)
+                        .environment(\.controlActiveState, .key)
+                        .environment(\.colorScheme, .light)
                 } else {
                     backdrop(frame: frame)
                 }
