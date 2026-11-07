@@ -372,8 +372,16 @@ final class LauncherModel: ObservableObject {
         }
     }
 
+    /// Where the open folder's icon is, as a unit point of the screen (the panel grows from it).
+    var folderOrigin: UnitPoint {
+        guard let id = openFolderID, let pos = layout.position(of: id), size.width > 0, size.height > 0 else { return .center }
+        let c = isVertical ? metrics.verticalIconCenter(flat: layout.flatIndex(of: pos), scrollY: scrollY)
+                           : metrics.iconCenter(slot: pos.index)
+        return UnitPoint(x: c.x / size.width, y: c.y / size.height)
+    }
+
     func openFolder(_ id: String) {
-        withAnimation(anim(0.35)) {
+        withAnimation(.smooth(duration: 0.34 / max(0.25, settings.animationSpeed))) {
             openFolderID = id
             folderPage = 0
             keyboardIndex = nil
@@ -382,7 +390,7 @@ final class LauncherModel: ObservableObject {
 
     func closeFolder() {
         guard openFolderID != nil else { return }
-        withAnimation(anim(0.3)) { openFolderID = nil }
+        withAnimation(.smooth(duration: 0.28 / max(0.25, settings.animationSpeed))) { openFolderID = nil }
         keyboardIndex = nil
         scheduleSave()
     }

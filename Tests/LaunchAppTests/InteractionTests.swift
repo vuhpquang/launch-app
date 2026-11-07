@@ -155,6 +155,24 @@ final class InteractionTests: XCTestCase {
         XCTAssertEqual(model.layout.allItems.first { $0.isFolder }?.folder?.apps, ["c", "a"])
     }
 
+    func testSlowDragThroughGapsDoesNotShuffle() {
+        // Carry "a" slowly (~200 pt/s) across the gaps to "d", then rest on it.
+        model.mouseDown(at: center(0), modifiers: [], clickCount: 1)
+        var p = CGPoint(x: center(0).x + 20, y: center(0).y)
+        model.mouseDragged(to: p)
+        while p.x < center(3).x {
+            p.x = min(center(3).x, p.x + 10)
+            model.mouseDragged(to: p)
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertEqual(ids[0], ["a", "b", "c", "d", "e", "f", "g", "h"])
+        Thread.sleep(forTimeInterval: 0.25)
+        model.mouseDragged(to: CGPoint(x: p.x + 1, y: p.y))
+        XCTAssertEqual(model.mergeTargetID, "d")
+        model.mouseUp(at: p, modifiers: [])
+        XCTAssertEqual(model.layout.allItems.first { $0.isFolder }?.folder?.apps, ["d", "a"])
+    }
+
     func testMouseWheelUpDownFlipsPages() {
         // Classic wheel: one notch down → next page.
         model.scrollWheel(dx: 0, dy: -1, precise: false, phase: [], momentum: [])

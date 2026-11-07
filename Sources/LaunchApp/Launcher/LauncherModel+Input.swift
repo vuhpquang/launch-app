@@ -37,6 +37,7 @@ final class InputState {
     var lastWheelFlip = Date.distantPast
     var lastWheelEvent = Date.distantPast
     var velocityReset: DispatchWorkItem?
+    var pendingCheck: DispatchWorkItem?
     var ignoreMomentum = false
 }
 
@@ -363,7 +364,8 @@ extension LauncherModel {
         guard var d = drag else { return }
         let dt = max(0.004, Date().timeIntervalSince(d.lastUpdate))
         let v = CGSize(width: (p.x - d.location.x) / dt, height: (p.y - d.location.y) / dt)
-        d.velocity = CGSize(width: d.velocity.width * 0.7 + v.width * 0.3, height: d.velocity.height * 0.7 + v.height * 0.3)
+        // Smoothed; after a pause the old speed no longer counts.
+        d.velocity = dt > 0.1 ? v : CGSize(width: d.velocity.width * 0.7 + v.width * 0.3, height: d.velocity.height * 0.7 + v.height * 0.3)
         d.lastUpdate = Date()
         d.location = p
         drag = d
@@ -457,7 +459,7 @@ extension LauncherModel {
         var over: (id: String, slot: Int)?
         for (item, slot) in visibleSlots where !d.ids.contains(item.id) {
             let c = onScreenCenter(slot: slot)
-            if hypot(iconCenter.x - c.x, iconCenter.y - c.y) < metrics.iconSize * 0.5 { over = (item.id, slot); break }
+            if hypot(iconCenter.x - c.x, iconCenter.y - c.y) < metrics.iconSize * 0.62 { over = (item.id, slot); break }
         }
         if let over {
             if d.mergeCandidate != over.id {
@@ -468,7 +470,7 @@ extension LauncherModel {
             // An icon that just slid under the pointer isn't a target yet.
             let settled = now.timeIntervalSince(d.lastMove) > 0.3
             if draggingOnlyApps {
-                if rested > 0.22, settled, mergeTargetID != over.id {
+                if rested > 0.18, settled, mergeTargetID != over.id {
                     withAnimation(anim(0.25)) { mergeTargetID = over.id }
                 }
             } else if rested > 0.45, settled {
@@ -482,25 +484,50 @@ extension LauncherModel {
         d.mergeCandidate = nil
         if mergeTargetID != nil { withAnimation(anim(0.25)) { mergeTargetID = nil } }
 
-        // In a gap: make room there once the spot has been held briefly.
+        // In a gap: make room there only once the icon has (nearly) stopped there, so
+        // passing through gaps on the way to a folder doesn't shuffle the icons.
         let slot = isVertical ? metrics.verticalSlot(at: iconCenter, scrollY: scrollY) : metrics.nearestSlot(to: iconCenter)
-        if d.pendingTarget != slot {
+        let speed = hypot(d.velocity.width, d.velocity.height)
+        if dragTarget(d, slot: slot) == d.target {
+            d.pendingTarget = nil
+        } else if d.pendingTarget != slot || speed > Self.restingSpeed {
             d.pendingTarget = slot
             d.pendingSince = now
-        } else if let since = d.pendingSince, now.timeIntervalSince(since) > 0.08 {
+            schedulePendingCheck()
+        } else if let since = d.pendingSince, now.timeIntervalSince(since) > Self.gapDwell {
             moveDragTarget(&d, slot: slot, now: now)
+            d.pendingTarget = nil
+        } else {
+            schedulePendingCheck()
         }
         drag = d
     }
 
-    private func moveDragTarget(_ d: inout DragState, slot: Int, now: Date) {
-        let target: ItemPosition
-        if isVertical {
-            target = d.base.position(forFlatIndex: min(slot, d.base.allItems.count))
-        } else {
-            let count = page < d.base.pages.count ? d.base.pages[page].count : 0
-            target = ItemPosition(page: page, index: min(slot, count))
+    /// Below this (points/s) the dragged icon counts as resting.
+    static let restingSpeed: CGFloat = 90
+    /// How long it must rest in a gap before the icons make room.
+    static let gapDwell: TimeInterval = 0.28
+
+    /// The pointer may stop completely (no more drag events), so re-check the gap rule
+    /// shortly after the last movement.
+    private func schedulePendingCheck() {
+        input.pendingCheck?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let d = self.drag, d.pendingTarget != nil else { return }
+            self.updateItemDrag(to: d.location)
         }
+        input.pendingCheck = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.gapDwell + 0.05, execute: work)
+    }
+
+    private func dragTarget(_ d: DragState, slot: Int) -> ItemPosition {
+        if isVertical { return d.base.position(forFlatIndex: min(slot, d.base.allItems.count)) }
+        let count = page < d.base.pages.count ? d.base.pages[page].count : 0
+        return ItemPosition(page: page, index: min(slot, count))
+    }
+
+    private func moveDragTarget(_ d: inout DragState, slot: Int, now: Date) {
+        let target = dragTarget(d, slot: slot)
         guard target != d.target else { return }
         d.target = target
         d.lastMove = now

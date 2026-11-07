@@ -19,9 +19,22 @@ struct LauncherView: View {
                 .opacity(model.presented ? 1 : 0)
 
             ZStack(alignment: .topLeading) {
+                // Opening a folder: the grid recedes under a veil of the (already blurred)
+                // wallpaper. Only opacity/scale animate — an animated blur over the whole
+                // grid made the folder open stutter.
                 GridLayer(model: model, metrics: m)
-                    .blur(radius: model.openFolderID != nil ? 22 : 0)
-                    .opacity(model.openFolderID != nil ? 0.45 : 1)
+                    .scaleEffect(model.openFolderID != nil ? 0.97 : 1)
+                    .opacity(model.openFolderID != nil ? 0.35 : 1)
+                if s.background == .wallpaper, let img = model.backgroundImage {
+                    Image(decorative: img, scale: 1).resizable().aspectRatio(contentMode: .fill)
+                        .frame(width: model.size.width, height: model.size.height)
+                        .clipped()
+                        .overlay(Color.black.opacity(s.backgroundDim))
+                        .opacity(model.openFolderID != nil ? 0.8 : 0)
+                        .allowsHitTesting(false)
+                } else {
+                    Color.black.opacity(model.openFolderID != nil ? 0.35 : 0).allowsHitTesting(false)
+                }
 
                 SearchField(model: model)
                     .frame(width: m.searchFieldFrame.width, height: m.searchFieldFrame.height)
@@ -46,8 +59,9 @@ struct LauncherView: View {
             .opacity(model.presented ? 1 : 0)
 
             if let folder = model.openFolder, let fm = model.folderMetrics {
+                // Grows out of the folder's icon, like Launchpad.
                 FolderOverlay(model: model, folder: folder, fm: fm)
-                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+                    .transition(.scale(scale: 0.35, anchor: model.folderOrigin).combined(with: .opacity))
             }
 
             if let drag = model.drag, let item = model.displayItem(id: drag.ids[0]) {
@@ -642,21 +656,27 @@ struct LiquidGlassTile: View {
                     // glass goes flat and dark.
                     // Frosted, light glass like macOS 26's folders (clear glass vanishes over
                     // dark wallpapers).
-                    Color.clear.glassEffect(.regular.tint(.white.opacity(0.18)), in: shape)
+                    Color.clear.glassEffect(.regular.tint(.white.opacity(0.05)), in: shape)
                         .environment(\.controlActiveState, .key)
                         .environment(\.colorScheme, .light)
                 } else {
                     backdrop(frame: frame)
                 }
                 // Lift: glass brightens what is behind it, more toward the light.
-                LinearGradient(colors: useSystemGlass ? [.white.opacity(0.16), .white.opacity(0.06)]
+                LinearGradient(colors: useSystemGlass ? [.white.opacity(0.10), .white.opacity(0.0)]
                                                       : [.white.opacity(0.30), .white.opacity(0.20)],
                                startPoint: UnitPoint(x: 0.5 + light.direction.dx * 0.5, y: 0.5 + light.direction.dy * 0.5),
                                endPoint: UnitPoint(x: 0.5 - light.direction.dx * 0.5, y: 0.5 - light.direction.dy * 0.5))
                 if useSystemGlass {
                     // Specular edges, lit from above the screen; they swing with drag speed.
                     shape.strokeBorder(AngularGradient(stops: light.rimStops, center: .center),
-                                       lineWidth: max(1.2, geo.size.width * 0.016))
+                                       lineWidth: max(1.5, geo.size.width * 0.022))
+                        .blendMode(.plusLighter)
+                    // Lensing glow just inside the edge: light bent by the thick rim.
+                    shape.inset(by: geo.size.width * 0.035)
+                        .stroke(AngularGradient(stops: light.rimStops, center: .center), lineWidth: geo.size.width * 0.06)
+                        .blur(radius: geo.size.width * 0.035)
+                        .opacity(0.55)
                         .blendMode(.plusLighter)
                 } else {
                     shape.strokeBorder(.white.opacity(0.22), lineWidth: 0.8)
