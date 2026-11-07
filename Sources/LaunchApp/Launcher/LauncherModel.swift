@@ -155,9 +155,28 @@ final class LauncherModel: ObservableObject {
 
     // MARK: - Geometry
 
+    /// Asked for many times per frame (every tile, hit test and drag step), so it is built
+    /// once per change of its inputs; reading `settings` copies the whole Settings struct.
     var metrics: GridMetrics {
-        GridMetrics(size: size, columns: settings.columns, rows: settings.rows, iconScale: settings.iconScale,
-                    showLabels: settings.showLabels, labelSize: settings.labelSize, compact: compact)
+        let key = MetricsKey(size: size, compact: compact, settings: prefs.revision)
+        if let cached = metricsCache, cached.key == key { return cached.metrics }
+        let s = settings
+        let m = GridMetrics(size: size, columns: s.columns, rows: s.rows, iconScale: s.iconScale,
+                            showLabels: s.showLabels, labelSize: s.labelSize, compact: compact)
+        metricsCache = (key, m)
+        return m
+    }
+    private struct MetricsKey: Equatable {
+        let size: CGSize, compact: Bool, settings: Int
+    }
+    private var metricsCache: (key: MetricsKey, metrics: GridMetrics)?
+
+    /// What tiles need to draw themselves (see `TileLook`).
+    var tileLook: TileLook {
+        let s = settings
+        return TileLook(showLabels: s.showLabels, labelSize: s.labelSize, editing: isEditing,
+                        systemGlass: s.liquidGlass && !reduceTransparency, glassTint: glassTint, screen: size,
+                        wallpaper: s.background == .wallpaper ? backgroundImage : nil)
     }
 
     var folderMetrics: FolderMetrics? {
@@ -212,8 +231,11 @@ final class LauncherModel: ObservableObject {
             DispatchQueue.main.async {
                 self.scanning = false
                 let old = self.apps
-                self.apps = Dictionary(found.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-                if Set(old.keys) != Set(self.apps.keys) || !self.hasLoaded { self.applyCatalog(sorted: found) }
+                let new = Dictionary(found.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                // Unchanged (the usual case when the launcher opens): publishing it anyway
+                // re-evaluated every tile in the middle of the open animation.
+                if new != old { self.apps = new }
+                if Set(old.keys) != Set(new.keys) || !self.hasLoaded { self.applyCatalog(sorted: found) }
                 IconCache.shared.preload(found.map(\.url), points: self.metrics.iconSize)
             }
         }
@@ -309,10 +331,12 @@ final class LauncherModel: ObservableObject {
     }
 
     func clampPage() {
-        page = min(max(0, page), pageCount - 1)
+        let p = min(max(0, page), pageCount - 1)
+        if p != page { page = p }
         if isVertical {
             let count = displayPages.flatMap { $0 }.count
-            scrollY = min(max(0, scrollY), metrics.maxScrollY(count: count))
+            let y = min(max(0, scrollY), metrics.maxScrollY(count: count))
+            if y != scrollY { scrollY = y }
         }
     }
 
@@ -334,27 +358,29 @@ final class LauncherModel: ObservableObject {
         if v != systemGlassTint { systemGlassTint = min(1, max(0, v)) }
     }
 
+    // Each assignment to a @Published property re-renders, even with the same value, so
+    // these only write what actually changes.
     func willPresent() {
         readSystemGlassTint()
-        query = ""
-        openFolderID = nil
-        editing = false
-        selection = []
-        keyboardIndex = nil
+        if !query.isEmpty { query = "" }
+        if openFolderID != nil { openFolderID = nil }
+        if editing { editing = false }
+        if !selection.isEmpty { selection = [] }
+        if keyboardIndex != nil { keyboardIndex = nil }
         cancelItemDrag()
-        dialog = nil
-        pageOffset = 0
+        if dialog != nil { dialog = nil }
+        if pageOffset != 0 { pageOffset = 0 }
         clampPage()
         focusSearchToken += 1
     }
 
     func didDismiss() {
-        openFolderID = nil
-        editing = false
-        optionHeld = false
+        if openFolderID != nil { openFolderID = nil }
+        if editing { editing = false }
+        if optionHeld { optionHeld = false }
         cancelItemDrag()
-        mergeTargetID = nil
-        query = ""
+        if mergeTargetID != nil { mergeTargetID = nil }
+        if !query.isEmpty { query = "" }
     }
 
     // MARK: - Search
@@ -423,15 +449,15 @@ final class LauncherModel: ObservableObject {
     func openFolder(_ id: String) {
         withAnimation(.snappy(duration: 0.24 / max(0.25, settings.animationSpeed))) {
             openFolderID = id
-            folderPage = 0
-            keyboardIndex = nil
+            if folderPage != 0 { folderPage = 0 }
+            if keyboardIndex != nil { keyboardIndex = nil }
         }
     }
 
     func closeFolder() {
         guard openFolderID != nil else { return }
         withAnimation(.snappy(duration: 0.2 / max(0.25, settings.animationSpeed))) { openFolderID = nil }
-        keyboardIndex = nil
+        if keyboardIndex != nil { keyboardIndex = nil }
         scheduleSave()
     }
 

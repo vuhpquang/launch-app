@@ -7,13 +7,14 @@ import AppKit
 final class IconCache {
     static let shared = IconCache()
 
-    private var cache: [String: NSImage] = [:]
+    private struct Key: Hashable { let url: URL; let bucket: Int }
+    private var cache: [Key: NSImage] = [:]
     private let lock = NSLock()
 
     /// Icon for the app at `url`, rasterised at `points` × the main screen's scale.
     func icon(for url: URL, points: CGFloat) -> NSImage {
         let bucket = max(16, (points / 8).rounded(.up) * 8)   // reuse across tiny size changes
-        let key = "\(url.path)#\(Int(bucket))"
+        let key = Key(url: url, bucket: Int(bucket))
         lock.lock()
         if let img = cache[key] { lock.unlock(); return img }
         lock.unlock()
@@ -50,10 +51,17 @@ final class IconCache {
         lock.unlock()
     }
 
-    /// Warms the cache off the main thread.
+    /// Warms the cache off the main thread, at every size the launcher draws for an icon of
+    /// `points`: the tile, the miniatures inside a folder, and the dragged folder's
+    /// refraction. A miss is rasterised on the main thread, which stalled the first folder
+    /// open and folder drag.
     func preload(_ urls: [URL], points: CGFloat) {
+        let lens = points * 0.72
+        let sizes = [points, points * 0.232, lens, lens * 0.23]
         DispatchQueue.global(qos: .userInitiated).async {
-            for url in urls { _ = self.icon(for: url, points: points) }
+            for size in sizes {
+                for url in urls { _ = self.icon(for: url, points: size) }
+            }
         }
     }
 }

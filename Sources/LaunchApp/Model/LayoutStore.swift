@@ -9,7 +9,13 @@ enum LayoutStore {
         return base.appendingPathComponent("LaunchApp", isDirectory: true)
     }
 
-    static var fileURL: URL { directory.appendingPathComponent("layout.json") }
+    static var fileURL: URL {
+        #if DEBUG
+        // LAUNCHAPP_LAYOUT_FILE: work on a copy (the bench drags icons around).
+        if let path = ProcessInfo.processInfo.environment["LAUNCHAPP_LAYOUT_FILE"] { return URL(fileURLWithPath: path) }
+        #endif
+        return directory.appendingPathComponent("layout.json")
+    }
 
     static func load(from url: URL = fileURL) -> Layout? {
         guard let data = try? Data(contentsOf: url) else { return nil }

@@ -19,7 +19,7 @@ final class LauncherWindowController: NSObject, LauncherHost, NSWindowDelegate {
     let prefs: Preferences
     private(set) var window: LauncherWindow!
     private var interaction: InteractionView!
-    private var hosting: NSHostingView<LauncherView>!
+    private var hosting: LauncherHostingView!
     private var keyMonitor: Any?
     private(set) var isVisible = false
     private var hideWork: DispatchWorkItem?
@@ -50,7 +50,7 @@ final class LauncherWindowController: NSObject, LauncherHost, NSWindowDelegate {
         let container = NSView(frame: w.contentLayoutRect)
         container.wantsLayer = true
         container.autoresizingMask = [.width, .height]
-        hosting = NSHostingView(rootView: LauncherView(model: model, prefs: prefs))
+        hosting = LauncherHostingView(rootView: LauncherView(model: model, prefs: prefs))
         hosting.frame = container.bounds
         hosting.autoresizingMask = [.width, .height]
         hosting.sizingOptions = []
@@ -85,12 +85,19 @@ final class LauncherWindowController: NSObject, LauncherHost, NSWindowDelegate {
         } else {
             frame = screen.frame
         }
-        model.compact = s.displayMode == .window
-        model.size = frame.size
-        window.setFrame(frame, display: false)
+        // Only when something changed: setting the frame (or the size) lays out the whole
+        // SwiftUI tree synchronously, which cost ~30 ms on every open.
+        if model.compact != (s.displayMode == .window) { model.compact = s.displayMode == .window }
+        if model.size != frame.size { model.size = frame.size }
+        if window.frame != frame { window.setFrame(frame, display: false) }
+        // Icons are cached per size; the first scan ran before the screen size was known.
+        IconCache.shared.preload(model.apps.values.map(\.url), points: model.metrics.iconSize)
 
         if s.background == .wallpaper {
-            Wallpaper.shared.image(for: screen) { [weak self] img in self?.model.backgroundImage = img }
+            Wallpaper.shared.image(for: screen) { [weak self] img in
+                guard let self, self.model.backgroundImage !== img else { return }
+                self.model.backgroundImage = img
+            }
         }
 
         model.willPresent()
@@ -113,7 +120,11 @@ final class LauncherWindowController: NSObject, LauncherHost, NSWindowDelegate {
         DispatchQueue.main.async {
             withAnimation(.spring(duration: 0.32 / max(0.25, s.animationSpeed), bounce: 0.1)) { self.model.presented = true }
         }
-        model.refreshApps()
+        // Rescan once the open animation is over, so a catalog change doesn't land mid-animation.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4 / max(0.25, s.animationSpeed)) { [weak self] in
+            guard let self, self.isVisible else { return }
+            self.model.refreshApps()
+        }
     }
 
     func dismissLauncher(launching: Bool) {
@@ -229,6 +240,18 @@ final class LauncherWindowController: NSObject, LauncherHost, NSWindowDelegate {
 }
 
 // MARK: - Interaction view
+
+/// The SwiftUI host. While anything animates, AppKit refreshes the tracking areas every
+/// frame and each refresh ends in `NSCursor.set()` for the arrow. With a customised pointer
+/// (Accessibility → Pointer size/colour) every `set()` re-renders the cursor image on the
+/// main thread — over a second of CPU across a few opens and folder animations. The
+/// launcher only ever shows the arrow here (text fields set their own I-beam), so only set
+/// it when it isn't already the current cursor.
+final class LauncherHostingView: NSHostingView<LauncherView> {
+    override func cursorUpdate(with event: NSEvent) {
+        if NSCursor.current != NSCursor.arrow { NSCursor.arrow.set() }
+    }
+}
 
 final class InteractionView: NSView, NSDraggingSource {
     weak var model: LauncherModel?

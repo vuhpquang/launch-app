@@ -187,8 +187,13 @@ final class Preferences: ObservableObject {
     private static let key = "settings.v1"
 
     @Published var settings: Settings {
-        didSet { if settings != oldValue { save() } }
+        didSet {
+            revision &+= 1
+            if settings != oldValue { save() }
+        }
     }
+    /// Bumped on every write to `settings`: a cheap key for values derived from them.
+    private(set) var revision = 0
 
     private let defaults: UserDefaults
 

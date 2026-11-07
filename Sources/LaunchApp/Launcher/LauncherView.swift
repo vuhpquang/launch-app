@@ -36,11 +36,6 @@ struct LauncherView: View {
                     Color.black.opacity(model.openFolderID != nil ? 0.35 : 0).allowsHitTesting(false)
                 }
 
-                SearchField(model: model)
-                    .frame(width: m.searchFieldFrame.width, height: m.searchFieldFrame.height)
-                    .position(x: m.searchFieldFrame.midX, y: m.searchFieldFrame.midY)
-                    .opacity(model.openFolderID != nil ? 0 : 1)
-
                 if s.showPageDots, !model.isVertical, model.pageCount > 1 {
                     PageDots(count: model.pageCount, current: model.page, offset: model.pageOffset, width: model.size.width)
                         .frame(width: m.pageDotsFrame(count: model.pageCount).width, height: 18)
@@ -58,10 +53,21 @@ struct LauncherView: View {
             .scaleEffect(model.presented ? 1 : 1.1)
             .opacity(model.presented ? 1 : 0)
 
+            // Outside the scale: its AppKit text field re-rasterises on the CPU at every
+            // scale step, which made opening the launcher stutter. It only fades.
+            SearchField(model: model)
+                .frame(width: m.searchFieldFrame.width, height: m.searchFieldFrame.height)
+                .position(x: m.searchFieldFrame.midX, y: m.searchFieldFrame.midY)
+                .opacity(model.presented && model.openFolderID == nil ? 1 : 0)
+
             if let folder = model.openFolder, let fm = model.folderMetrics {
                 // Grows out of the folder's icon, like Launchpad.
                 FolderOverlay(model: model, folder: folder, fm: fm)
                     .transition(.scale(scale: 0.5, anchor: model.folderOrigin).combined(with: .opacity))
+                // The name only fades: an AppKit text field inside the scaling panel
+                // re-rasterised its text on the CPU every frame of the open animation.
+                FolderTitleField(model: model, folder: folder, fm: fm)
+                    .transition(.opacity)
             }
 
             if let drag = model.drag, let item = model.displayItem(id: drag.ids[0]) {
@@ -139,11 +145,12 @@ struct GridLayer: View {
         let dragged = Set(model.drag?.ids ?? [])
         let keyboardID = model.keyboardItemID
         let selected = Set(model.selection)
+        let look = model.tileLook
         if model.isVertical {
             let flat = pages.flatMap { $0 }
             ZStack(alignment: .topLeading) {
                 ForEach(Array(flat.enumerated()), id: \.element.id) { index, item in
-                    tile(item, dragged: dragged, keyboardID: keyboardID, selected: selected)
+                    tile(item, look: look, center: nil, dragged: dragged, keyboardID: keyboardID, selected: selected)
                         .position(metrics.verticalIconCenter(flat: index, scrollY: 0))
                 }
             }
@@ -169,7 +176,7 @@ struct GridLayer: View {
                         ZStack(alignment: .topLeading) {
                             ForEach(Array(pages[p].enumerated()), id: \.element.id) { index, item in
                                 let c = metrics.iconCenter(slot: index)
-                                tile(item, dragged: dragged, keyboardID: keyboardID, selected: selected)
+                                tile(item, look: look, center: c, dragged: dragged, keyboardID: keyboardID, selected: selected)
                                     .position(x: c.x, y: c.y)
                                     .transition(.identity)
                             }
@@ -187,12 +194,15 @@ struct GridLayer: View {
     }
 
     @ViewBuilder
-    private func tile(_ item: LayoutItem, dragged: Set<String>, keyboardID: String?, selected: Set<String>) -> some View {
-        IconTile(model: model, item: item, metrics: metrics,
+    private func tile(_ item: LayoutItem, look: TileLook, center: CGPoint?, dragged: Set<String>, keyboardID: String?,
+                      selected: Set<String>) -> some View {
+        IconTile(model: model, item: item, metrics: metrics, look: look,
                  highlighted: keyboardID == item.id,
                  selected: selected.contains(item.id),
                  mergeTarget: model.mergeTargetID == item.id,
-                 showDelete: model.isEditing && model.canUninstall(item))
+                 showDelete: look.editing && model.canUninstall(item),
+                 center: center)
+            .equatable()
             .opacity(dragged.contains(item.id) ? 0 : 1)
     }
 }
@@ -244,10 +254,34 @@ struct PageTransitionEffect: ViewModifier {
 
 // MARK: - Icon tile
 
-struct IconTile: View {
-    @ObservedObject var model: LauncherModel
+/// What a tile needs from the launcher besides its own item. Tiles take this instead of
+/// observing the model, so a change elsewhere (drag target, open folder, page, search) does
+/// not re-evaluate every icon on screen: SwiftUI skips a tile whose inputs are unchanged.
+struct TileLook: Equatable {
+    var showLabels: Bool
+    var labelSize: CGFloat
+    var editing: Bool
+    /// System Liquid Glass (on, and Reduce Transparency off) vs the plain frosted pane.
+    var systemGlass: Bool
+    var glassTint: Double
+    var screen: CGSize
+    /// The blurred wallpaper, when that is the background (the frosted pane shows it).
+    var wallpaper: CGImage?
+
+    static func == (a: TileLook, b: TileLook) -> Bool {
+        a.showLabels == b.showLabels && a.labelSize == b.labelSize && a.editing == b.editing
+            && a.systemGlass == b.systemGlass && a.glassTint == b.glassTint && a.screen == b.screen
+            && a.wallpaper === b.wallpaper
+    }
+}
+
+struct IconTile: View, Equatable {
     let item: LayoutItem
     let metrics: GridMetrics
+    let look: TileLook
+    let name: String
+    /// The app's bundle (apps), or the first nine apps' bundles (folders).
+    let urls: [URL?]
     var highlighted = false
     var selected = false
     var mergeTarget = false
@@ -255,10 +289,44 @@ struct IconTile: View {
     var cellWidth: CGFloat? = nil
     var tilt: CGSize = .zero
     var lensAt: CGPoint? = nil
+    /// Where the icon rests on screen, when known: the glass is lit from there instead of
+    /// tracking its live position (which changes every frame while things animate, and made
+    /// every folder redraw its rim on the CPU each frame).
+    var center: CGPoint? = nil
+    /// Only for the refraction of a dragged folder; not observed.
+    let model: LauncherModel
+
+    init(model: LauncherModel, item: LayoutItem, metrics: GridMetrics, look: TileLook,
+         highlighted: Bool = false, selected: Bool = false, mergeTarget: Bool = false, showDelete: Bool = false,
+         cellWidth: CGFloat? = nil, tilt: CGSize = .zero, lensAt: CGPoint? = nil, center: CGPoint? = nil) {
+        self.model = model
+        self.item = item
+        self.metrics = metrics
+        self.look = look
+        self.name = look.showLabels ? model.name(of: item) : ""
+        switch item {
+        case .app(let id): urls = [model.apps[id]?.url]
+        case .folder(let f): urls = f.apps.prefix(9).map { model.apps[$0]?.url }
+        }
+        self.highlighted = highlighted
+        self.selected = selected
+        self.mergeTarget = mergeTarget
+        self.showDelete = showDelete
+        self.cellWidth = cellWidth
+        self.tilt = tilt
+        self.lensAt = lensAt
+        self.center = center
+    }
+
+    static func == (a: IconTile, b: IconTile) -> Bool {
+        a.item == b.item && a.metrics == b.metrics && a.look == b.look && a.name == b.name && a.urls == b.urls
+            && a.highlighted == b.highlighted && a.selected == b.selected && a.mergeTarget == b.mergeTarget
+            && a.showDelete == b.showDelete && a.cellWidth == b.cellWidth && a.tilt == b.tilt
+            && a.lensAt == b.lensAt && a.center == b.center && a.model === b.model
+    }
 
     var body: some View {
         let s = metrics.iconSize
-        let settings = model.settings
         VStack(spacing: 8) {
             ZStack {
                 if highlighted || selected {
@@ -287,11 +355,11 @@ struct IconTile: View {
                 }
             }
             .frame(width: s, height: s)
-            .modifier(Wiggle(active: model.isEditing, seed: item.id.hashValue))
+            .modifier(Wiggle(active: look.editing, seed: item.id.hashValue))
 
-            if settings.showLabels {
-                Text(model.name(of: item))
-                    .font(.system(size: settings.labelSize, weight: .medium))
+            if look.showLabels {
+                Text(name)
+                    .font(.system(size: look.labelSize, weight: .medium))
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
                     .lineLimit(1)
@@ -301,22 +369,22 @@ struct IconTile: View {
             }
         }
         // Keep the icon centre where GridMetrics expects it: shift down by half the label block.
-        .offset(y: settings.showLabels ? (8 + metrics.labelHeight) / 2 : 0)
+        .offset(y: look.showLabels ? (8 + metrics.labelHeight) / 2 : 0)
     }
 
     @ViewBuilder
     private func iconImage(size s: CGFloat) -> some View {
         switch item {
-        case .app(let id):
-            if let app = model.apps[id] {
-                Image(nsImage: IconCache.shared.icon(for: app.url, points: s))
+        case .app:
+            if let url = urls.first ?? nil {
+                Image(nsImage: IconCache.shared.icon(for: url, points: s))
                     .resizable()
                     .interpolation(.high)
                     .frame(width: s, height: s)
                     .overlay {
                         // A moving glint while the icon is carried around.
                         if tilt != .zero {
-                            GlassGlint(screen: model.size, tilt: tilt, strength: 0.5)
+                            GlassGlint(screen: look.screen, tilt: tilt, strength: 0.5)
                                 .clipShape(RoundedRectangle(cornerRadius: s * 0.2, style: .continuous))
                                 .frame(width: s * 0.82, height: s * 0.82)
                         }
@@ -324,8 +392,8 @@ struct IconTile: View {
             } else {
                 RoundedRectangle(cornerRadius: s * 0.22).fill(.white.opacity(0.15)).frame(width: s * 0.8, height: s * 0.8)
             }
-        case .folder(let f):
-            FolderIcon(model: model, folder: f, size: s, tilt: tilt, lensAt: lensAt)
+        case .folder:
+            FolderIcon(model: model, urls: urls, look: look, size: s, tilt: tilt, lensAt: lensAt, center: center ?? lensAt)
         }
     }
 }
@@ -363,31 +431,35 @@ struct Wiggle: ViewModifier {
 }
 
 struct FolderIcon: View {
-    @ObservedObject var model: LauncherModel
-    let folder: Folder
+    let model: LauncherModel
+    let urls: [URL?]
+    let look: TileLook
     let size: CGFloat
     var tilt: CGSize = .zero
     /// Screen point of this icon's centre while it is being dragged: the glass then bends
     /// the icons underneath it at its edges.
     var lensAt: CGPoint? = nil
+    /// Where the icon sits on screen, if known (see `IconTile.center`).
+    var center: CGPoint? = nil
 
     var body: some View {
         let inner = size * 0.232
         let gap = size * 0.046
-        let shown = Array(folder.apps.prefix(9))
+        let pane = size * 0.86
         ZStack {
-            LiquidGlassTile(model: model, cornerRadius: size * 0.235 * 0.86, tilt: tilt)
-                .frame(width: size * 0.86, height: size * 0.86)
-            if let lensAt, model.settings.liquidGlass {
-                GlassLens(model: model, center: lensAt, side: size * 0.86, cornerRadius: size * 0.235 * 0.86)
+            LiquidGlassTile(look: look, cornerRadius: size * 0.235 * 0.86, tilt: tilt,
+                            screenFrame: center.map { CGRect(x: $0.x - pane / 2, y: $0.y - pane / 2, width: pane, height: pane) })
+                .frame(width: pane, height: pane)
+            if let lensAt, look.systemGlass {
+                GlassLens(model: model, center: lensAt, side: pane, cornerRadius: size * 0.235 * 0.86)
             }
             VStack(spacing: gap) {
                 ForEach(0..<3, id: \.self) { row in
                     HStack(spacing: gap) {
                         ForEach(0..<3, id: \.self) { col in
                             let i = row * 3 + col
-                            if i < shown.count, let app = model.apps[shown[i]] {
-                                Image(nsImage: IconCache.shared.icon(for: app.url, points: inner))
+                            if i < urls.count, let url = urls[i] {
+                                Image(nsImage: IconCache.shared.icon(for: url, points: inner))
                                     .resizable().frame(width: inner, height: inner)
                             } else {
                                 Color.clear.frame(width: inner, height: inner)
@@ -424,7 +496,7 @@ struct DraggedIcon: View {
     var body: some View {
         let m = model.metrics
         ZStack(alignment: .topTrailing) {
-            IconTile(model: model, item: item, metrics: m, tilt: tilt,
+            IconTile(model: model, item: item, metrics: m, look: model.tileLook, tilt: tilt,
                      lensAt: pointer.iconCenter)
                 .scaleEffect(1.1)
                 .shadow(color: .black.opacity(0.28), radius: 10, y: 5)
@@ -499,33 +571,16 @@ struct FolderOverlay: View {
     @ObservedObject var model: LauncherModel
     let folder: Folder
     let fm: FolderMetrics
-    @State private var title = ""
-    @FocusState private var editingTitle: Bool
-
     var body: some View {
         let panel = fm.panelRect
         let cap = fm.capacity
         let pages = max(1, Int(ceil(Double(folder.apps.count) / Double(cap))))
         let dragged = Set(model.drag?.ids ?? [])
+        let look = model.tileLook
         ZStack(alignment: .topLeading) {
             Color.black.opacity(0.001)   // keeps the overlay full-size
 
-            TextField("", text: $title)
-                .textFieldStyle(.plain)
-                .multilineTextAlignment(.center)
-                .font(.system(size: 30, weight: .semibold))
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
-                .focused($editingTitle)
-                .onSubmit { commit() }
-                .onChange(of: editingTitle) { _, focused in
-                    model.folderTitleEditing = focused
-                    if !focused { commit() }
-                }
-                .frame(width: fm.titleFrame.width, height: fm.titleFrame.height)
-                .position(x: fm.titleFrame.midX, y: fm.titleFrame.midY)
-
-            LiquidGlassTile(model: model, cornerRadius: 36, frost: 0.15)
+            LiquidGlassTile(look: look, cornerRadius: 36, frost: 0.15, screenFrame: panel)
                 .frame(width: panel.width, height: panel.height)
                 .position(x: panel.midX, y: panel.midY)
 
@@ -533,11 +588,12 @@ struct FolderOverlay: View {
                 ForEach(Array(folder.apps.enumerated()), id: \.element) { index, id in
                     let c = fm.iconCenter(slot: index)
                     let pageShift = CGFloat(index / cap - model.folderPage) * panel.width
-                    IconTile(model: model, item: .app(id), metrics: model.metrics,
+                    IconTile(model: model, item: .app(id), metrics: model.metrics, look: look,
                              highlighted: model.keyboardItemID == id,
                              selected: model.selection.contains(id),
-                             showDelete: model.isEditing && model.apps[id].map(AppActions.canUninstall) == true,
+                             showDelete: look.editing && model.apps[id].map(AppActions.canUninstall) == true,
                              cellWidth: fm.cell.width)
+                        .equatable()
                         .opacity(dragged.contains(id) ? 0 : 1)
                         .position(x: c.x + pageShift, y: c.y)
                 }
@@ -553,6 +609,36 @@ struct FolderOverlay: View {
                 PageDots(count: pages, current: model.folderPage, offset: 0, width: panel.width)
                     .position(x: panel.midX, y: panel.maxY + 22)
             }
+        }
+        .frame(width: model.size.width, height: model.size.height)
+    }
+}
+
+/// The open folder's name, editable in place.
+struct FolderTitleField: View {
+    @ObservedObject var model: LauncherModel
+    let folder: Folder
+    let fm: FolderMetrics
+    @State private var title = ""
+    @FocusState private var editingTitle: Bool
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear
+            TextField("", text: $title)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .font(.system(size: 30, weight: .semibold))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
+                .focused($editingTitle)
+                .onSubmit { commit() }
+                .onChange(of: editingTitle) { _, focused in
+                    model.folderTitleEditing = focused
+                    if !focused { commit() }
+                }
+                .frame(width: fm.titleFrame.width, height: fm.titleFrame.height)
+                .position(x: fm.titleFrame.midX, y: fm.titleFrame.midY)
         }
         .frame(width: model.size.width, height: model.size.height)
         .onAppear { title = folder.name }
@@ -656,69 +742,81 @@ struct DialogView: View {
 /// the tile is on screen — so it stays correct while the tile is dragged, scaled or
 /// wiggling (the system glass material samples badly inside moving layers and turns dark).
 struct LiquidGlassTile: View {
-    @ObservedObject var model: LauncherModel
+    let look: TileLook
     let cornerRadius: CGFloat
     var tilt: CGSize = .zero
     /// Extra frosting for large panes (the open folder), 0…1.
     var frost: Double = 0
-    /// On: the system's Liquid Glass (refracts the wallpaper and icons behind it) with
-    /// specular edges. Off: a plain frosted pane.
-    var useSystemGlass: Bool { model.settings.liquidGlass && !model.reduceTransparency }
+    /// The pane's frame on screen, when the caller knows it. The pane is then lit from
+    /// there and drawn once; without it, it follows its live position with a
+    /// GeometryReader (vertical scrolling), which redraws it whenever it moves.
+    var screenFrame: CGRect? = nil
 
     var body: some View {
+        if let screenFrame {
+            pane(frame: screenFrame, size: screenFrame.size)
+        } else {
+            GeometryReader { geo in
+                pane(frame: geo.frame(in: .global), size: geo.size)
+            }
+        }
+    }
+
+    private func pane(frame: CGRect, size: CGSize) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         // 0 = clear … 1 = tinted (Settings, or System Settings → Appearance → Liquid Glass).
-        let tint = min(1, model.glassTint + frost)
-        GeometryReader { geo in
-            let frame = geo.frame(in: .global)
-            let light = GlassLight(frame: frame, screen: model.size, tilt: tilt)
-            // Edge sizes follow the pane up to icon size, then stay put (a big panel keeps a
-            // thin rim instead of a thick band).
-            let e = min(geo.size.width, geo.size.height, 140)
-            ZStack(alignment: .topLeading) {
-                if useSystemGlass {
-                    // Always drawn as in a key window: the launcher can be on screen while
-                    // another app is active (opened by the hot corner or MCP), and inactive
-                    // glass goes flat and dark.
-                    Color.clear.glassEffect(.clear.tint(.white.opacity(0.24 * tint)), in: shape)
-                        .environment(\.controlActiveState, .key)
-                        .environment(\.colorScheme, .light)
-                } else {
-                    backdrop(frame: frame)
-                }
-                // Lift: glass brightens what is behind it, more toward the light.
-                LinearGradient(colors: useSystemGlass ? [.white.opacity(0.06 + 0.16 * tint), .white.opacity(0.10 * tint)]
-                                                      : [.white.opacity(0.30), .white.opacity(0.20)],
-                               startPoint: UnitPoint(x: 0.5 + light.direction.dx * 0.5, y: 0.5 + light.direction.dy * 0.5),
-                               endPoint: UnitPoint(x: 0.5 - light.direction.dx * 0.5, y: 0.5 - light.direction.dy * 0.5))
-                if useSystemGlass {
-                    // Specular edges, lit from above the screen; they swing with drag speed.
-                    shape.strokeBorder(AngularGradient(stops: light.rimStops, center: .center),
-                                       lineWidth: max(1.5, e * 0.022))
-                        .blendMode(.plusLighter)
-                    // Lensing glow just inside the edge: light bent by the thick rim.
+        let tint = min(1, look.glassTint + frost)
+        let light = GlassLight(frame: frame, screen: look.screen, tilt: tilt)
+        // Edge sizes follow the pane up to icon size, then stay put (a big panel keeps a
+        // thin rim instead of a thick band).
+        let e = min(size.width, size.height, 140)
+        let useSystemGlass = look.systemGlass
+        return ZStack(alignment: .topLeading) {
+            if useSystemGlass {
+                // Always drawn as in a key window: the launcher can be on screen while
+                // another app is active (opened by the hot corner or MCP), and inactive
+                // glass goes flat and dark.
+                Color.clear.glassEffect(.clear.tint(.white.opacity(0.24 * tint)), in: shape)
+                    .environment(\.controlActiveState, .key)
+                    .environment(\.colorScheme, .light)
+            } else {
+                backdrop(frame: frame)
+            }
+            // Lift: glass brightens what is behind it, more toward the light.
+            LinearGradient(colors: useSystemGlass ? [.white.opacity(0.06 + 0.16 * tint), .white.opacity(0.10 * tint)]
+                                                  : [.white.opacity(0.30), .white.opacity(0.20)],
+                           startPoint: UnitPoint(x: 0.5 + light.direction.dx * 0.5, y: 0.5 + light.direction.dy * 0.5),
+                           endPoint: UnitPoint(x: 0.5 - light.direction.dx * 0.5, y: 0.5 - light.direction.dy * 0.5))
+            if useSystemGlass {
+                let rim = AngularGradient(stops: light.rimStops, center: .center)
+                // Specular edges, lit from above the screen; they swing with drag speed.
+                // Lensing glow just inside the edge: light bent by the thick rim. Both are
+                // flattened into one GPU-drawn layer instead of CPU-stroked shapes.
+                ZStack {
+                    shape.strokeBorder(rim, lineWidth: max(1.5, e * 0.022))
                     shape.inset(by: e * 0.035)
-                        .stroke(AngularGradient(stops: light.rimStops, center: .center), lineWidth: e * 0.06)
+                        .stroke(rim, lineWidth: e * 0.06)
                         .blur(radius: e * 0.035)
                         .opacity(0.55)
-                        .blendMode(.plusLighter)
-                } else {
-                    shape.strokeBorder(.white.opacity(0.22), lineWidth: 0.8)
                 }
+                .drawingGroup()
+                .blendMode(.plusLighter)
+            } else {
+                shape.strokeBorder(.white.opacity(0.22), lineWidth: 0.8)
             }
-            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
-            .clipShape(shape)
-            .shadow(color: .black.opacity(0.18), radius: 4, y: 1.5)
         }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .clipShape(shape)
+        .shadow(color: .black.opacity(0.18), radius: 4, y: 1.5)
     }
 
     @ViewBuilder
     private func backdrop(frame: CGRect) -> some View {
-        if model.settings.background == .wallpaper, let image = model.backgroundImage {
+        if let image = look.wallpaper {
             Image(decorative: image, scale: 1)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(width: model.size.width, height: model.size.height)
+                .frame(width: look.screen.width, height: look.screen.height)
                 .offset(x: -frame.minX, y: -frame.minY)
                 .frame(width: frame.width, height: frame.height, alignment: .topLeading)
                 .saturation(1.15)

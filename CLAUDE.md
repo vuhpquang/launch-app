@@ -13,7 +13,19 @@ scripts/release.sh X.Y.Z [notes.md]          # bump, test, build, verify signer,
 INSTALL=1 scripts/release.sh X.Y.Z notes.md  # …and replace /Applications/LaunchApp.app
 LAUNCHAPP_SNAPSHOT=/tmp/x.png .build/debug/LaunchApp           # offscreen render (works with screen locked)
 LAUNCHAPP_DEBUG=folder|edit|search:saf|page:1|settings:apps     # put the UI in a state
+# frame-time bench (open, folder open/close, drags); drags reorder, so use a layout copy:
+swift build -c release -Xswiftc -DDEBUG --build-path .build-bench
+cp ~/Library/Application\ Support/LaunchApp/layout.json /tmp/l.json
+LAUNCHAPP_BENCH=1 LAUNCHAPP_LAYOUT_FILE=/tmp/l.json .build-bench/release/LaunchApp --background
+#   LAUNCHAPP_BENCH_ONLY=folder, LAUNCHAPP_BENCH_DELAY=5 (time to attach `xctrace record --attach`)
 ```
+
+Performance notes (measured with the bench): tiles (`IconTile`) don't observe the model —
+they take `TileLook` + explicit values and are `.equatable()`, so a publish elsewhere
+doesn't re-evaluate every icon. Glass is lit from a known `screenFrame`, not a live
+GeometryReader (that redrew every rim each animation frame). Keep AppKit text fields out of
+scale animations (they re-rasterise per frame). With a customised pointer, every
+`NSCursor.set()` is expensive — `LauncherHostingView` skips redundant ones.
 
 Text fields and glass don't render in the offscreen snapshot (yellow boxes); everything else does.
 `.build/debug/LaunchApp` runs without a bundle, so it uses its own defaults domain but the

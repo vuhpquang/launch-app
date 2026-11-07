@@ -20,6 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var launchedAt = Date()
     private var control: ControlServer?
+    #if DEBUG
+    private var bench: Bench?
+    #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model = LauncherModel(prefs: prefs)
@@ -81,9 +84,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return try self.model.control(cmd, args)
             }
         }
-        control?.start()
+        #if DEBUG
+        let benching = ProcessInfo.processInfo.environment["LAUNCHAPP_BENCH"] != nil
+        #else
+        let benching = false
+        #endif
+        // A bench run must not take over the installed app's control socket.
+        if benching { control = nil } else { control?.start() }
 
         #if DEBUG
+        if benching {
+            bench = Bench(model: model, launcher: launcher)
+            bench?.run()
+            return
+        }
         // LAUNCHAPP_DEBUG="search:saf" | "folder" | "edit" | "settings:<pane>" — puts the UI in a
         // state for screenshots (`screencapture`) without clicking.
         let env = ProcessInfo.processInfo.environment
