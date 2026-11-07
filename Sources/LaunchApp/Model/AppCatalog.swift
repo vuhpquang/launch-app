@@ -47,14 +47,17 @@ enum AppScanner {
         var seenPaths = Set<String>()
 
         func walk(_ dir: URL, level: Int) {
-            guard let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey, .isPackageKey],
-                                                            options: [.skipsHiddenFiles]) else { return }
-            for url in entries {
+            // Not .skipsHiddenFiles: /Applications/Safari.app is a symlink flagged hidden
+            // (Safari lives in a cryptex). Dot-files and hidden folders are still skipped.
+            guard let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey, .isPackageKey, .isHiddenKey],
+                                                            options: []) else { return }
+            for url in entries where !url.lastPathComponent.hasPrefix(".") {
                 let resolved = url.resolvingSymlinksInPath()
                 if url.pathExtension.lowercased() == "app" {
                     if seenPaths.insert(resolved.path).inserted { urls.append(url) }
                     continue
                 }
+                if (try? url.resourceValues(forKeys: [.isHiddenKey]))?.isHidden == true { continue }
                 let values = try? resolved.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
                 if values?.isDirectory == true, values?.isPackage != true, level < depth {
                     walk(url, level: level + 1)

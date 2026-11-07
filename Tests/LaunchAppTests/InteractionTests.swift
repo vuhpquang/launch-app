@@ -137,6 +137,28 @@ final class InteractionTests: XCTestCase {
         XCTAssertTrue(model.prefs.settings.hiddenApps.contains("c"))
     }
 
+    func testMouseWheelUpDownFlipsPages() {
+        // Classic wheel: one notch down → next page.
+        model.scrollWheel(dx: 0, dy: -1, precise: false, phase: [], momentum: [])
+        XCTAssertEqual(model.page, 1)
+        // Smooth-scrolling mouse (precise deltas, no phases), scrolling up → back.
+        model.input.lastWheelFlip = .distantPast
+        for _ in 0..<6 { model.scrollWheel(dx: 0, dy: 9, precise: true, phase: [], momentum: []) }
+        XCTAssertEqual(model.page, 0)
+    }
+
+    func testLayoutPresetAndIconSizeKeys() {
+        LayoutPreset.dense.apply(to: &model.prefs.settings)
+        XCTAssertEqual(LayoutPreset.matching(model.settings), .dense)
+        XCTAssertEqual(model.metrics.capacity, 60)
+        let before = model.metrics.iconSize
+        XCTAssertTrue(model.keyDown(keyCode: 27, modifiers: .command, characters: "-"))
+        XCTAssertLessThan(model.metrics.iconSize, before)
+        XCTAssertNil(LayoutPreset.matching(model.settings))
+        XCTAssertTrue(model.keyDown(keyCode: 29, modifiers: .command, characters: "0"))
+        XCTAssertEqual(model.settings.iconScale, 1.0)
+    }
+
     func testClickOnPageDot() {
         let f = model.metrics.pageDotsFrame(count: 2)
         let p = CGPoint(x: f.maxX - 9, y: f.midY)

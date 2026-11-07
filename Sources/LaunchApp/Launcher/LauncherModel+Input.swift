@@ -35,6 +35,8 @@ final class InputState {
     var swipeVelocity: CGFloat = 0
     var wheelAccum: CGFloat = 0
     var lastWheelFlip = Date.distantPast
+    var lastWheelEvent = Date.distantPast
+    var velocityReset: DispatchWorkItem?
     var ignoreMomentum = false
 }
 
@@ -264,7 +266,9 @@ extension LauncherModel {
             scrollY = min(max(0, scrollY - delta), metrics.maxScrollY(count: count))
             return
         }
-        if !precise {
+        // A wheel (or a mouse with smooth scrolling — precise deltas but no gesture phases)
+        // flips one page per notch/flick, up/down as well as left/right.
+        if !precise || (phase.isEmpty && momentum.isEmpty) {
             discreteFlip(dx: dx, dy: dy, precise: false, phase: phase, momentum: momentum) { dir in self.goToPage(self.page + dir) }
             return
         }
@@ -290,7 +294,8 @@ extension LauncherModel {
     private func discreteFlip(dx: CGFloat, dy: CGFloat, precise: Bool, phase: NSEvent.Phase, momentum: NSEvent.Phase,
                               flip: (Int) -> Void) {
         if !momentum.isEmpty { return }
-        if phase.contains(.began) { input.wheelAccum = 0 }
+        if phase.contains(.began) || Date().timeIntervalSince(input.lastWheelEvent) > 0.3 { input.wheelAccum = 0 }
+        input.lastWheelEvent = Date()
         let d = abs(dx) >= abs(dy) ? dx : dy
         input.wheelAccum += d
         let threshold: CGFloat = precise ? 40 : 1
@@ -353,8 +358,20 @@ extension LauncherModel {
 
     func updateItemDrag(to p: CGPoint) {
         guard var d = drag else { return }
+        let dt = max(0.004, Date().timeIntervalSince(d.lastUpdate))
+        let v = CGSize(width: (p.x - d.location.x) / dt, height: (p.y - d.location.y) / dt)
+        d.velocity = CGSize(width: d.velocity.width * 0.7 + v.width * 0.3, height: d.velocity.height * 0.7 + v.height * 0.3)
+        d.lastUpdate = Date()
         d.location = p
         drag = d
+        // The glass settles when the pointer stops.
+        input.velocityReset?.cancel()
+        let reset = DispatchWorkItem { [weak self] in
+            guard let self, self.drag != nil else { return }
+            withAnimation(.spring(duration: 0.45, bounce: 0.35)) { self.drag?.velocity = .zero }
+        }
+        input.velocityReset = reset
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.09, execute: reset)
 
         // Over the Dock (but not in a page-flip zone): hand the app to a real drag session
         // so the Dock can take it.
@@ -519,6 +536,9 @@ extension LauncherModel {
             case ",": host?.openSettings(); return true
             case "w", "q": host?.dismissLauncher(launching: false); return true
             case "f": focusSearchToken += 1; return true
+            case "=", "+": adjustIconScale(by: 0.1); return true
+            case "-", "_": adjustIconScale(by: -0.1); return true
+            case "0": adjustIconScale(by: nil); return true
             case "a" where !isSearching:
                 withAnimation(.easeOut(duration: 0.15)) {
                     selection = (openFolder?.apps ?? (page < layout.pages.count ? layout.pages[page].map(\.id) : []))
@@ -714,6 +734,13 @@ extension LauncherModel {
         ]
     }
 
+    /// Steps the icon size (nil = default), clamped to the Settings slider's range.
+    func adjustIconScale(by step: Double?) {
+        let current = prefs.settings.iconScale
+        let next = step.map { ((current + $0) * 10).rounded() / 10 } ?? 1.0
+        withAnimation(anim(0.25)) { prefs.settings.iconScale = min(1.6, max(0.5, next)) }
+    }
+
     private func backgroundMenu() -> [MenuEntry] {
         [
             MenuEntry(title: editing ? "Done Editing" : "Edit Layout", symbol: "square.grid.3x3") { [weak self] in
@@ -721,6 +748,16 @@ extension LauncherModel {
                 withAnimation(self.anim(0.3)) { self.editing.toggle() }
             },
             MenuEntry(title: "Sort All Apps by Name", symbol: "textformat") { [weak self] in self?.sortAlphabetically() },
+            MenuEntry(title: "Layout", symbol: "rectangle.grid.3x2", children: LayoutPreset.allCases.map { preset in
+                MenuEntry(title: preset.title, checked: LayoutPreset.matching(settings) == preset) { [weak self] in
+                    if let self { preset.apply(to: &self.prefs.settings) }
+                }
+            }),
+            MenuEntry(title: "Icon Size", symbol: "textformat.size", children: [
+                MenuEntry(title: "Larger  (⌘+)") { [weak self] in self?.adjustIconScale(by: 0.1) },
+                MenuEntry(title: "Smaller  (⌘−)") { [weak self] in self?.adjustIconScale(by: -0.1) },
+                MenuEntry(title: "Default  (⌘0)") { [weak self] in self?.adjustIconScale(by: nil) },
+            ]),
             MenuEntry(title: "Import Launchpad Layout", symbol: "square.and.arrow.down", enabled: LaunchpadImporter.isAvailable) { [weak self] in
                 self?.importLaunchpadLayout()
             },

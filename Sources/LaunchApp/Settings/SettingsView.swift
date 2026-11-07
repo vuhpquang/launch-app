@@ -116,13 +116,20 @@ struct AppearancePane: View {
             Picker("Scrolling", selection: $prefs.settings.scrollMode) {
                 ForEach(ScrollMode.allCases) { Text($0.title).tag($0) }
             }
+            Picker("Preset", selection: Binding<LayoutPreset?>(
+                get: { LayoutPreset.matching(prefs.settings) },
+                set: { if let p = $0 { p.apply(to: &prefs.settings) } })) {
+                ForEach(LayoutPreset.allCases) { Text($0.title).tag(Optional($0)) }
+                if LayoutPreset.matching(prefs.settings) == nil { Text("Custom").tag(LayoutPreset?.none) }
+            }
             Stepper("Columns: \(prefs.settings.columns)", value: $prefs.settings.columns, in: 3...12)
             Stepper("Rows: \(prefs.settings.rows)", value: $prefs.settings.rows, in: 2...9)
             Stepper("Folder columns: \(prefs.settings.folderColumns)", value: $prefs.settings.folderColumns, in: 3...9)
             Stepper("Folder rows: \(prefs.settings.folderRows)", value: $prefs.settings.folderRows, in: 1...6)
         }
         Section("Icons") {
-            slider("Icon size", value: $prefs.settings.iconScale, range: 0.6...1.4, format: { "\(Int($0 * 100))%" })
+            slider("Icon size", value: $prefs.settings.iconScale, range: 0.5...1.6, format: { "\(Int($0 * 100))%" })
+            Text("In the launcher: ⌘+ / ⌘− change the icon size, ⌘0 resets it.").font(.callout).foregroundStyle(.secondary)
             Toggle("Show names", isOn: $prefs.settings.showLabels)
             if prefs.settings.showLabels {
                 slider("Name size", value: $prefs.settings.labelSize, range: 10...18, format: { "\(Int($0)) pt" })

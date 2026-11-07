@@ -43,6 +43,33 @@ enum HotCorner: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Ready-made grid/icon combinations, picked from Settings → Appearance or the launcher's
+/// right-click menu.
+enum LayoutPreset: String, CaseIterable, Identifiable {
+    case classic, compact, dense, spacious, big
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .classic: return "Classic (7 × 5)"
+        case .compact: return "Compact (8 × 6)"
+        case .dense: return "Dense (10 × 6)"
+        case .spacious: return "Spacious (6 × 4)"
+        case .big: return "Big Icons (5 × 3)"
+        }
+    }
+    var columns: Int { [.classic: 7, .compact: 8, .dense: 10, .spacious: 6, .big: 5][self]! }
+    var rows: Int { [.classic: 5, .compact: 6, .dense: 6, .spacious: 4, .big: 3][self]! }
+    var iconScale: Double { [.classic: 1.0, .compact: 1.0, .dense: 0.95, .spacious: 1.0, .big: 1.0][self]! }
+
+    func apply(to s: inout Settings) {
+        s.columns = columns; s.rows = rows; s.iconScale = iconScale
+    }
+
+    static func matching(_ s: Settings) -> LayoutPreset? {
+        allCases.first { $0.columns == s.columns && $0.rows == s.rows && abs($0.iconScale - s.iconScale) < 0.001 }
+    }
+}
+
 struct Settings: Codable, Equatable {
     // General
     var showInDock = true

@@ -184,6 +184,7 @@ struct IconTile: View {
     var mergeTarget = false
     var showDelete = false
     var cellWidth: CGFloat? = nil
+    var tilt: CGSize = .zero
 
     var body: some View {
         let s = metrics.iconSize
@@ -242,11 +243,19 @@ struct IconTile: View {
                     .resizable()
                     .interpolation(.high)
                     .frame(width: s, height: s)
+                    .overlay {
+                        // A moving glint while the icon is carried around.
+                        if tilt != .zero {
+                            GlassGlint(screen: model.size, tilt: tilt, strength: 0.5)
+                                .clipShape(RoundedRectangle(cornerRadius: s * 0.2, style: .continuous))
+                                .frame(width: s * 0.82, height: s * 0.82)
+                        }
+                    }
             } else {
                 RoundedRectangle(cornerRadius: s * 0.22).fill(.white.opacity(0.15)).frame(width: s * 0.8, height: s * 0.8)
             }
         case .folder(let f):
-            FolderIcon(model: model, folder: f, size: s)
+            FolderIcon(model: model, folder: f, size: s, tilt: tilt)
         }
     }
 }
@@ -283,16 +292,14 @@ struct FolderIcon: View {
     @ObservedObject var model: LauncherModel
     let folder: Folder
     let size: CGFloat
+    var tilt: CGSize = .zero
 
     var body: some View {
         let inner = size * 0.205
         let gap = size * 0.06
         let shown = Array(folder.apps.prefix(9))
         ZStack {
-            RoundedRectangle(cornerRadius: size * 0.235, style: .continuous)
-                .fill(.white.opacity(0.18))
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: size * 0.235, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: size * 0.235, style: .continuous).strokeBorder(.white.opacity(0.22), lineWidth: 0.8))
+            LiquidGlassTile(screen: model.size, cornerRadius: size * 0.235 * 0.86, tilt: tilt)
                 .frame(width: size * 0.86, height: size * 0.86)
             VStack(spacing: gap) {
                 ForEach(0..<3, id: \.self) { row in
@@ -318,12 +325,16 @@ struct DraggedIcon: View {
     @ObservedObject var model: LauncherModel
     let item: LayoutItem
     let count: Int
+    var tilt: CGSize { model.drag.map { $0.velocity == .zero ? CGSize(width: 0.001, height: 0) : $0.velocity } ?? .zero }
 
     var body: some View {
         let m = model.metrics
         ZStack(alignment: .topTrailing) {
-            IconTile(model: model, item: item, metrics: m)
+            IconTile(model: model, item: item, metrics: m, tilt: tilt)
                 .scaleEffect(1.08)
+                // Lean into the motion, like a glass pane being pushed.
+                .rotation3DEffect(.degrees(Double(max(-14, min(14, tilt.width / 90)))), axis: (x: 0, y: 1, z: 0), perspective: 0.6)
+                .rotation3DEffect(.degrees(Double(max(-14, min(14, -tilt.height / 90)))), axis: (x: 1, y: 0, z: 0), perspective: 0.6)
                 .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
             if count > 1 {
                 Text("\(count)")
@@ -541,5 +552,98 @@ struct DialogView: View {
     private func close() {
         withAnimation(model.anim(0.2)) { model.dialog = nil }
         model.focusSearchToken += 1
+    }
+}
+
+
+// MARK: - Liquid Glass
+
+/// A folder tile made of Liquid Glass: the system glass material, plus a rim light and a
+/// soft specular sheen lit from a light above the screen. Both follow where the tile is on
+/// screen and lean with `tilt` (drag velocity), so the light slides across the glass as the
+/// folder is dragged around.
+struct LiquidGlassTile: View {
+    let screen: CGSize
+    let cornerRadius: CGFloat
+    var tilt: CGSize = .zero
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        GeometryReader { geo in
+            let light = GlassLight(frame: geo.frame(in: .global), screen: screen, tilt: tilt)
+            ZStack {
+                shape.fill(.white.opacity(0.07))
+                    .glassEffect(.regular.tint(.white.opacity(0.05)), in: shape)
+                // Specular sheen: a soft bright spot on the side facing the light.
+                Ellipse()
+                    .fill(RadialGradient(colors: [.white.opacity(0.28 * light.intensity), .white.opacity(0)],
+                                         center: .center, startRadius: 0, endRadius: geo.size.width * 0.55))
+                    .frame(width: geo.size.width * 1.1, height: geo.size.height * 0.75)
+                    .offset(x: light.direction.dx * geo.size.width * 0.38, y: light.direction.dy * geo.size.height * 0.42)
+                    .blendMode(.plusLighter)
+                    .clipShape(shape)
+                // Rim light: brightest on the edge facing the light, a faint bounce opposite.
+                shape.strokeBorder(
+                    AngularGradient(stops: light.rimStops, center: .center),
+                    lineWidth: max(1, geo.size.width * 0.018))
+                    .blendMode(.plusLighter)
+                shape.strokeBorder(.white.opacity(0.10), lineWidth: 0.6)
+            }
+        }
+    }
+}
+
+/// A diagonal glint across an app icon while it is dragged.
+struct GlassGlint: View {
+    let screen: CGSize
+    let tilt: CGSize
+    var strength: Double = 0.5
+
+    var body: some View {
+        GeometryReader { geo in
+            let light = GlassLight(frame: geo.frame(in: .global), screen: screen, tilt: tilt)
+            LinearGradient(stops: [
+                .init(color: .white.opacity(0), location: 0.25),
+                .init(color: .white.opacity(strength * light.intensity), location: 0.48),
+                .init(color: .white.opacity(0), location: 0.62),
+            ], startPoint: UnitPoint(x: 0.5 + light.direction.dx * 0.9, y: 0.5 + light.direction.dy * 0.9),
+               endPoint: UnitPoint(x: 0.5 - light.direction.dx * 0.9, y: 0.5 - light.direction.dy * 0.9))
+            .blendMode(.plusLighter)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Where the light comes from for a tile at `frame`: a point above the top centre of the
+/// screen, nudged by motion (moving fast to the right tips the glass, so the highlight
+/// swings left — it trails the motion like a reflection would).
+struct GlassLight {
+    let direction: CGVector   // unit vector from the tile centre toward the light
+    let intensity: Double     // 0.6…1.2
+
+    init(frame: CGRect, screen: CGSize, tilt: CGSize) {
+        let w = max(screen.width, 1), h = max(screen.height, 1)
+        let source = CGPoint(x: w * 0.5 - tilt.width * 0.9, y: -h * 0.35 - tilt.height * 0.6)
+        var dx = source.x - frame.midX, dy = source.y - frame.midY
+        let len = max(1, (dx * dx + dy * dy).squareRoot())
+        dx /= len; dy /= len
+        direction = CGVector(dx: dx, dy: dy)
+        let speed = min(1, (tilt.width * tilt.width + tilt.height * tilt.height).squareRoot() / 2500)
+        // Tiles nearer the top catch more light.
+        intensity = 0.6 + 0.35 * Double(1 - min(1, max(0, frame.midY / h))) + 0.35 * speed
+    }
+
+    /// AngularGradient stops (0 = right edge, clockwise in y-down space), sampled from a
+    /// bright lobe facing the light and a faint bounce on the opposite edge.
+    var rimStops: [Gradient.Stop] {
+        var a = atan2(direction.dy, direction.dx) / (2 * .pi)
+        if a < 0 { a += 1 }
+        func dist(_ x: Double, _ y: Double) -> Double { let d = abs(x - y).truncatingRemainder(dividingBy: 1); return min(d, 1 - d) }
+        return (0...48).map { i in
+            let t = Double(i) / 48
+            let lobe = 0.85 * intensity * exp(-pow(dist(t, a) / 0.075, 2))
+            let bounce = 0.22 * intensity * exp(-pow(dist(t, a + 0.5) / 0.1, 2))
+            return Gradient.Stop(color: .white.opacity(min(1, 0.04 + lobe + bounce)), location: t)
+        }
     }
 }

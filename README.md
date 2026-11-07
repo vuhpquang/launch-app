@@ -42,6 +42,23 @@ blocks it, open **System Settings → Privacy & Security** and click **Open Anyw
 - The Dock icon's menu lists every app and folder.
 - Updates itself from GitHub releases.
 
+## AI control (MCP)
+
+LaunchApp includes a [Model Context Protocol](https://modelcontextprotocol.io) server, so an
+AI assistant can read and reorganise your launcher: list apps, rebuild the whole layout,
+make/rename/fill folders, move apps between pages, hide/rename apps, change any setting or
+apply a layout preset, and show/hide the launcher. Changes appear live.
+
+```bash
+claude mcp add --scope user launchapp -- /Applications/LaunchApp.app/Contents/MacOS/LaunchApp mcp
+```
+
+Other clients: run `/Applications/LaunchApp.app/Contents/MacOS/LaunchApp mcp` as a stdio
+server. It talks to the running app over a private socket
+(`~/Library/Application Support/LaunchApp/control.sock`, owner-only) and starts LaunchApp in
+the background if needed. Try: *"Group my apps into folders by category, put the ones I use
+for work on page 1."*
+
 ## Keyboard
 
 | Key | Action |

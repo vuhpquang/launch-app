@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let pinch = TrackpadPinch()
     private var cancellables = Set<AnyCancellable>()
     private var launchedAt = Date()
+    private var control: ControlServer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model = LauncherModel(prefs: prefs)
@@ -62,6 +63,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         UpdateManager.shared.startAutomaticChecks()
 
+        // Control socket for the MCP server (`LaunchApp mcp`).
+        control = ControlServer { [weak self] cmd, args in
+            guard let self else { throw ControlError("shutting down") }
+            switch cmd {
+            case "show_launcher":
+                if !self.launcher.isVisible { self.launcher.show() }
+                return ["visible": true]
+            case "hide_launcher":
+                self.launcher.dismissLauncher(launching: false)
+                return ["visible": false]
+            case "status":
+                var s = try self.model.control(cmd, args) as? [String: Any] ?? [:]
+                s["launcherVisible"] = self.launcher.isVisible
+                return s
+            default:
+                return try self.model.control(cmd, args)
+            }
+        }
+        control?.start()
+
         #if DEBUG
         // LAUNCHAPP_DEBUG="search:saf" | "folder" | "edit" | "settings:<pane>" — puts the UI in a
         // state for screenshots (`screencapture`) without clicking.
@@ -86,13 +107,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
 
         // Opened by hand (not at login): show the launcher right away, like clicking Launchpad.
-        if !isLaunchedAtLogin {
+        if !isLaunchedAtLogin, !CommandLine.arguments.contains("--background") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self.launcher.show() }
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         model?.saveNow()
+        control?.stop()
     }
 
     private var isLaunchedAtLogin: Bool {

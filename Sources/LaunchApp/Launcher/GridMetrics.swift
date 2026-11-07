@@ -49,8 +49,9 @@ struct GridMetrics: Equatable {
 
     var iconSize: CGFloat {
         let c = cellSize
-        let base = min(c.width * 0.66, (c.height - labelHeight - 10) * 0.86)
-        return max(24, min(180, base * iconScale))
+        // About Launchpad's proportions: the icon takes ~42% of the cell width.
+        let base = min(c.width * 0.42, (c.height - labelHeight - 10) * 0.62)
+        return max(20, min(200, base * iconScale))
     }
 
     /// Centre of the icon image in slot `slot` (row-major), page-local.

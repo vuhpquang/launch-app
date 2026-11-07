@@ -56,6 +56,8 @@ struct DragState {
     var mergeCandidate: String?
     var mergeSince: Date?
     var lastMove = Date.distantPast
+    var velocity: CGSize = .zero      // points/s, smoothed — tilts the glass while dragging
+    var lastUpdate = Date()
 }
 
 final class LauncherModel: ObservableObject {

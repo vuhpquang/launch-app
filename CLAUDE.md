@@ -32,6 +32,10 @@ Tests use `LauncherModel(prefs:, persists: false)` — never let tests touch the
 - `Triggers/` — hotkey (Carbon), Launchpad/F4 key (CGEventTap, needs Accessibility), pinch
   (private MultitouchSupport, copied from Padlet), hot corner.
 - `System/` — icons cache, wallpaper blur, app actions (open, Dock tiles, uninstall).
+- `Control/` — MCP: `MCPServer` (`LaunchApp mcp`, stdio JSON-RPC, tool list) → `ControlSocket`
+  (Unix socket, 0600, peer uid checked) → `ControlServer` in the app → `LauncherModel.control`
+  (`ControlCommands.swift`). New tool = add to `MCPServer.tools` + `controlCommands` + the switch;
+  `ControlTests` checks they match. `--background` launch arg skips showing the launcher.
 - `Settings/`, `Update/` (GitHub releases self-update, copied from Padlet).
 
 App IDs are bundle ids (or the path for duplicates/no bundle id). Settings decode every field

@@ -3,6 +3,9 @@
 
 import AppKit
 
+// `LaunchApp mcp`: run as an MCP server on stdio (talks to the running app); no UI.
+if CommandLine.arguments.dropFirst().first == "mcp" { MCPServer.run() }
+
 #if DEBUG
 setvbuf(stdout, nil, _IOLBF, 0)
 #endif
