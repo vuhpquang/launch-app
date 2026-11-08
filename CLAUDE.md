@@ -68,4 +68,4 @@ The updater only installs builds from the same signer, so always release through
 Not notarized: first launch needs Privacy & Security → Open Anyway.
 
 GitNexus can't parse Swift; don't run `npx gitnexus analyze` in this repo.
-In the parent `software-team` repo, bump the pointer with `git add -f projects/launch-app`.
+In the parent `software-team` repo, bump the pointer with `git add projects/launch-app` and commit `chore: bump launch-app submodule (LaunchApp X.Y.Z)`.
