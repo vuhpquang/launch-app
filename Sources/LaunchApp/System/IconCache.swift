@@ -7,27 +7,32 @@ import AppKit
 final class IconCache {
     static let shared = IconCache()
 
-    private struct Key: Hashable { let url: URL; let bucket: Int }
+    private struct Key: Hashable { let url: URL; let bucket: Int; let scale: Int }
     private var cache: [Key: NSImage] = [:]
     private let lock = NSLock()
 
-    /// Icon for the app at `url`, rasterised at `points` × the main screen's scale.
+    /// Icon for the app at `url`, rasterised at `points` × the sharpest attached screen's scale.
+    /// The scale is part of the key: plugging in a Retina display re-renders 1× icons sharp.
     func icon(for url: URL, points: CGFloat) -> NSImage {
         let bucket = max(16, (points / 8).rounded(.up) * 8)   // reuse across tiny size changes
-        let key = Key(url: url, bucket: Int(bucket))
+        let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+        let key = Key(url: url, bucket: Int(bucket), scale: Int(scale.rounded()))
         lock.lock()
         if let img = cache[key] { lock.unlock(); return img }
         lock.unlock()
 
         let source = NSWorkspace.shared.icon(forFile: url.path)
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
         let px = Int(bucket * scale)
         let image: NSImage
         if let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8,
                                       samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                       colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
-           let ctx = NSGraphicsContext(bitmapImageRep: rep) {
-            rep.size = NSSize(width: bucket, height: bucket)
+           let ctx = { () -> NSGraphicsContext? in
+               // The size must be set before the context exists: the context takes its point→pixel
+               // transform from it. Set afterwards, a 2× bitmap got the icon in its top-left quarter.
+               rep.size = NSSize(width: bucket, height: bucket)
+               return NSGraphicsContext(bitmapImageRep: rep)
+           }() {
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = ctx
             ctx.imageInterpolation = .high
