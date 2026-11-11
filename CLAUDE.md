@@ -11,6 +11,7 @@ swift build / swift test          # unit + interaction tests (synthetic mouse/ke
 ./build.sh                        # release .app + styled DMG in build/
 scripts/release.sh X.Y.Z [notes.md]          # bump, test, build, verify signer, tag, push, GitHub release
 INSTALL=1 scripts/release.sh X.Y.Z notes.md  # …and replace /Applications/LaunchApp.app
+PUBLISH=0 INSTALL=1 scripts/release.sh X.Y.Z  # office (no GitHub): commit + tag locally + install
 LAUNCHAPP_SNAPSHOT=/tmp/x.png .build/debug/LaunchApp           # offscreen render (works with screen locked)
 LAUNCHAPP_DEBUG=folder|edit|search:saf|page:1|settings:apps     # put the UI in a state
 # frame-time bench (open, folder open/close, drags); drags reorder, so use a layout copy:
