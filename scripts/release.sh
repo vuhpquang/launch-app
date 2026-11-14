@@ -68,6 +68,7 @@ step "Bumping $PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $((BUILD + 1))" "$PLIST"
 
 step "Running tests"
+git submodule update --init --recursive   # Vendor/app-shell, pinned by commit
 swift test 2>&1 | grep -E "Executed [0-9]+ tests" | tail -1
 swift test >/dev/null 2>&1 || die "tests failed (run 'swift test')"
 

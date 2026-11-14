@@ -8,9 +8,17 @@ let package = Package(
     platforms: [
         .macOS("26.0")
     ],
+    dependencies: [
+        // Shared updater / About / Settings shell, a git submodule (git submodule update --init).
+        .package(path: "Vendor/app-shell"),
+    ],
     targets: [
         .executableTarget(
             name: "LaunchApp",
+            dependencies: [
+                .product(name: "AppShellCore", package: "app-shell"),
+                .product(name: "UpdaterKit", package: "app-shell"),
+            ],
             path: "Sources/LaunchApp",
             // Info.plist and the icon are copied into the .app by build.sh, not SPM.
             exclude: ["Resources"],

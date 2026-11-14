@@ -35,6 +35,8 @@ NOTARIZE="${NOTARIZE:-0}"
 
 # ── STEP 0: Clean ──────────────────────────────────────────
 echo "==> Preparing build directory…"
+# Vendor/app-shell (shared updater / About / Settings shell) is a submodule pinned by commit.
+git submodule update --init --recursive
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 

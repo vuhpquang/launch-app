@@ -3,6 +3,8 @@
 
 import AppKit
 import SwiftUI
+import AppShellCore
+import UpdaterKit
 
 enum SettingsPane: String, CaseIterable, Identifiable {
     case general, appearance, activation, apps, about
@@ -388,7 +390,7 @@ struct AppsPane: View {
 
 struct AboutPane: View {
     @ObservedObject var prefs: Preferences
-    @ObservedObject private var updater = UpdateManager.shared
+    @ObservedObject private var updater = Updater.shared
 
     var body: some View {
         Section {
@@ -424,8 +426,8 @@ struct AboutPane: View {
                 .disabled(!prefs.settings.autoCheckUpdates)
         }
         Section {
-            Link("GitHub — vuhpquang/launch-app", destination: URL(string: "https://github.com/\(UpdateManager.repo)")!)
-            Link("Release notes", destination: URL(string: "https://github.com/\(UpdateManager.repo)/releases")!)
+            Link("GitHub — vuhpquang/launch-app", destination: AppIdentity.launchApp.repoURL)
+            Link("Release notes", destination: AppIdentity.launchApp.releasesURL)
         }
     }
 

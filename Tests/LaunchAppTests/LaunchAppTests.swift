@@ -1,5 +1,6 @@
 import SQLite3
 import XCTest
+import AppShellCore
 @testable import LaunchApp
 
 final class LayoutTests: XCTestCase {
@@ -182,10 +183,14 @@ final class TriggerTests: XCTestCase {
         XCTAssertFalse(HotCornerMonitor.isInCorner(CGPoint(x: 700, y: 0), corner: .bottomRight, screens: screens))
     }
 
-    func testVersionCompare() {
-        XCTAssertTrue(UpdateManager.isVersion("1.0.1", newerThan: "1.0.0"))
-        XCTAssertFalse(UpdateManager.isVersion("1.0.0", newerThan: "1.0.0"))
-        XCTAssertTrue(UpdateManager.isVersion("1.10.0", newerThan: "1.9.9"))
+    @MainActor func testUpdateSettingsAdapterUsesExistingKeys() {
+        let prefs = Preferences(defaults: UserDefaults(suiteName: "launchapp-test-\(UUID())")!)
+        let store = LaunchAppUpdateSettings(prefs: prefs)
+        store.autoCheck = false
+        store.autoInstall = true
+        XCTAssertFalse(prefs.settings.autoCheckUpdates)
+        XCTAssertTrue(prefs.settings.autoInstallUpdates)
+        XCTAssertEqual(AppIdentity.launchApp.repo, "vuhpquang/launch-app")
     }
 
     func testSettingsDecodeWithMissingKeys() throws {

@@ -49,7 +49,12 @@ Tests use `LauncherModel(prefs:, persists: false)` — never let tests touch the
   (Unix socket, 0600, peer uid checked) → `ControlServer` in the app → `LauncherModel.control`
   (`ControlCommands.swift`). New tool = add to `MCPServer.tools` + `controlCommands` + the switch;
   `ControlTests` checks they match. `--background` launch arg skips showing the launcher.
-- `Settings/`, `Update/` (GitHub releases self-update, copied from Padlet).
+- `Settings/`. Self-update, About and the Settings shell come from **app-shell** (`Vendor/app-shell`, a git
+  submodule pinned by commit; `.package(path:)`). LaunchApp's values for it live in
+  `App/AppShell+LaunchApp.swift` (`AppIdentity.launchApp`, `Updater.shared`, an adapter over
+  `Preferences.settings` so the update keys stay). Fresh clone: `git submodule update --init`
+  (build.sh / release.sh do it). Changing the shared code = change `vuhpquang/app-shell`, then
+  `git -C Vendor/app-shell pull` here and commit the pointer (hub rule `.claude/rules/app-shell.md`).
 
 App IDs are bundle ids (or the path for duplicates/no bundle id). Settings decode every field
 with a default — add new fields to `Settings.init(from:)`.

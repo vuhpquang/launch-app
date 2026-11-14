@@ -6,6 +6,8 @@
 import AppKit
 import Combine
 import SwiftUI
+import AppShellCore
+import UpdaterKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let prefs = Preferences.shared
@@ -64,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.launcher.dismissLauncher(launching: true)
         }
 
-        UpdateManager.shared.startAutomaticChecks()
+        Updater.shared.startAutomaticChecks()
 
         // Control socket for the MCP server (`LaunchApp mcp`).
         control = ControlServer { [weak self] cmd, args in
@@ -257,7 +259,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MenuEntry(title: "Settings…", symbol: "gearshape") { [weak self] in self?.showSettings() },
                 MenuEntry(title: "Check for Updates…", symbol: "arrow.down.circle") { [weak self] in
                     self?.showSettings(pane: .about)
-                    UpdateManager.shared.check(userInitiated: true)
+                    MainActor.assumeIsolated { Updater.shared.check(userInitiated: true) }
                 },
                 .separator,
                 MenuEntry(title: "Quit LaunchApp", symbol: nil) { NSApp.terminate(nil) },
@@ -379,6 +381,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettingsAction() { showSettings() }
     @objc private func checkUpdates() {
         showSettings(pane: .about)
-        UpdateManager.shared.check(userInitiated: true)
+        MainActor.assumeIsolated { Updater.shared.check(userInitiated: true) }
     }
 }

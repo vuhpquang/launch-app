@@ -1,0 +1,3 @@
+[submodule "Vendor/app-shell"]
+	path = Vendor/app-shell
+	url = https://github.com/vuhpquang/app-shell.git
