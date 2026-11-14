@@ -18,6 +18,8 @@ let package = Package(
             dependencies: [
                 .product(name: "AppShellCore", package: "app-shell"),
                 .product(name: "UpdaterKit", package: "app-shell"),
+                .product(name: "AboutKit", package: "app-shell"),
+                .product(name: "SettingsKit", package: "app-shell"),
             ],
             path: "Sources/LaunchApp",
             // Info.plist and the icon are copied into the .app by build.sh, not SPM.

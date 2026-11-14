@@ -5,9 +5,12 @@ import AppKit
 import SwiftUI
 import AppShellCore
 import UpdaterKit
+import SettingsKit
 
+/// Settings pages. Raw values are pane ids (`LAUNCHAPP_DEBUG=settings:<id>`); `updates` and `about`
+/// are the shared app-shell panes, which SettingsShell adds after LaunchApp's own.
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, appearance, activation, apps, about
+    case general, appearance, activation, apps, updates, about
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -15,7 +18,8 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .appearance: return "Appearance"
         case .activation: return "Activation"
         case .apps: return "Apps & Layout"
-        case .about: return "About & Updates"
+        case .updates: return "Updates"
+        case .about: return "About"
         }
     }
     var symbol: String {
@@ -24,9 +28,12 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .appearance: return "paintbrush"
         case .activation: return "hand.tap"
         case .apps: return "square.grid.3x3"
+        case .updates: return "arrow.down.circle"
         case .about: return "info.circle"
         }
     }
+    /// LaunchApp's own pages, in sidebar order.
+    static let own: [SettingsPane] = [.general, .appearance, .activation, .apps]
 }
 
 final class SettingsState: ObservableObject {
@@ -34,6 +41,8 @@ final class SettingsState: ObservableObject {
     @Published var pane: SettingsPane = .general
 }
 
+/// The Settings window: LaunchApp's pages in the shared app-shell Settings shell (Updates and About
+/// come from the shell).
 struct SettingsView: View {
     @ObservedObject var model: LauncherModel
     @ObservedObject var prefs: Preferences
@@ -41,25 +50,28 @@ struct SettingsView: View {
     @ObservedObject private var state = SettingsState.shared
 
     var body: some View {
-        NavigationSplitView {
-            List(SettingsPane.allCases, selection: Binding(get: { state.pane }, set: { if let p = $0 { state.pane = p } })) { pane in
-                Label(pane.title, systemImage: pane.symbol).tag(pane)
-            }
-            .navigationSplitViewColumnWidth(190)
-        } detail: {
-            Form {
-                switch state.pane {
-                case .general: GeneralPane(prefs: prefs)
-                case .appearance: AppearancePane(prefs: prefs)
-                case .activation: ActivationPane(prefs: prefs, delegate: delegate)
-                case .apps: AppsPane(model: model, prefs: prefs)
-                case .about: AboutPane(prefs: prefs)
+        SettingsShell(
+            app: .launchApp,
+            updater: .shared,
+            panes: SettingsPane.own.map { pane in
+                SettingsKit.SettingsPane(id: pane.rawValue, title: pane.title, systemImage: pane.symbol) {
+                    Form { content(pane) }.formStyle(.grouped)
                 }
-            }
-            .formStyle(.grouped)
-            .navigationTitle(state.pane.title)
+            },
+            selection: Binding(get: { state.pane.rawValue },
+                               set: { state.pane = SettingsPane(rawValue: $0) ?? .general }),
+            onWhatsNew: { delegate?.showWhatsNew() }
+        )
+    }
+
+    @ViewBuilder private func content(_ pane: SettingsPane) -> some View {
+        switch pane {
+        case .general: GeneralPane(prefs: prefs)
+        case .appearance: AppearancePane(prefs: prefs)
+        case .activation: ActivationPane(prefs: prefs, delegate: delegate)
+        case .apps: AppsPane(model: model, prefs: prefs)
+        case .updates, .about: EmptyView()   // drawn by SettingsShell
         }
-        .frame(minWidth: 680, minHeight: 500)
     }
 }
 
@@ -67,16 +79,10 @@ struct SettingsView: View {
 
 struct GeneralPane: View {
     @ObservedObject var prefs: Preferences
-    @State private var loginItem = LaunchAtLogin.isEnabled
-    @State private var loginError: String?
 
     var body: some View {
         Section {
-            Toggle("Open at login", isOn: Binding(get: { loginItem }, set: { on in
-                loginError = LaunchAtLogin.set(on)
-                loginItem = LaunchAtLogin.isEnabled
-            }))
-            if let loginError { Text(loginError).font(.caption).foregroundStyle(.red) }
+            LaunchAtLoginRow(appName: "LaunchApp")
             Toggle("Show in Dock", isOn: $prefs.settings.showInDock)
             Toggle("Show in App Switcher (⌘Tab)", isOn: $prefs.settings.showInAppSwitcher)
             Toggle("Show apps in the Dock icon's menu", isOn: $prefs.settings.showAppsInDockMenu)
@@ -382,64 +388,6 @@ struct AppsPane: View {
         guard panel.runModal() == .OK else { return }
         for url in panel.urls where !prefs.settings.extraSources.contains(url.path) {
             prefs.settings.extraSources.append(url.path)
-        }
-    }
-}
-
-// MARK: - About
-
-struct AboutPane: View {
-    @ObservedObject var prefs: Preferences
-    @ObservedObject private var updater = Updater.shared
-
-    var body: some View {
-        Section {
-            HStack(spacing: 16) {
-                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 72, height: 72)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("LaunchApp").font(.title2.bold())
-                    Text("Version \(updater.currentVersion)").foregroundStyle(.secondary)
-                    Text("The classic Launchpad, back on macOS 26+.").font(.callout).foregroundStyle(.secondary)
-                }
-            }
-            .padding(.vertical, 6)
-        }
-        Section("Updates") {
-            HStack {
-                status
-                Spacer()
-                switch updater.state {
-                case .available:
-                    Button("Install Update") { updater.install() }.buttonStyle(.borderedProminent)
-                case .checking, .downloading, .installing:
-                    ProgressView().controlSize(.small)
-                default:
-                    Button("Check Now") { updater.check(userInitiated: true) }
-                }
-            }
-            if case .available = updater.state, !updater.releaseNotes.isEmpty {
-                ScrollView { Text(updater.releaseNotes).font(.callout).frame(maxWidth: .infinity, alignment: .leading) }
-                    .frame(maxHeight: 140)
-            }
-            Toggle("Check for updates automatically", isOn: $prefs.settings.autoCheckUpdates)
-            Toggle("Install updates automatically", isOn: $prefs.settings.autoInstallUpdates)
-                .disabled(!prefs.settings.autoCheckUpdates)
-        }
-        Section {
-            Link("GitHub — vuhpquang/launch-app", destination: AppIdentity.launchApp.repoURL)
-            Link("Release notes", destination: AppIdentity.launchApp.releasesURL)
-        }
-    }
-
-    @ViewBuilder private var status: some View {
-        switch updater.state {
-        case .idle: Text("Not checked yet").foregroundStyle(.secondary)
-        case .checking: Text("Checking…")
-        case .upToDate: Label("LaunchApp is up to date", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-        case .available(let v): Label("Version \(v) is available", systemImage: "arrow.down.circle.fill").foregroundStyle(.blue)
-        case .downloading: Text("Downloading…")
-        case .installing: Text("Installing…")
-        case .failed(let msg): Label(msg, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         }
     }
 }

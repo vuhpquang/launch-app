@@ -8,6 +8,7 @@ import Combine
 import SwiftUI
 import AppShellCore
 import UpdaterKit
+import AboutKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let prefs = Preferences.shared
@@ -15,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var launcher: LauncherWindowController!
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
+    private var whatsNewItem: NSMenuItem?
+    private var whatsNewSubscription: AnyCancellable?
     private var appWatcher: FolderWatcher!
     private let hotCorner = HotCornerMonitor()
     private let keyTap = LaunchpadKeyTap()
@@ -66,7 +69,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.launcher.dismissLauncher(launching: true)
         }
 
-        Updater.shared.startAutomaticChecks()
+        MainActor.assumeIsolated {
+            Updater.shared.startAutomaticChecks()
+            WhatsNewTracker.shared.evaluateLaunch()
+        }
 
         // Control socket for the MCP server (`LaunchApp mcp`).
         control = ControlServer { [weak self] cmd, args in
@@ -88,11 +94,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #if DEBUG
         let benching = ProcessInfo.processInfo.environment["LAUNCHAPP_BENCH"] != nil
+        let snapshotting = ProcessInfo.processInfo.environment["LAUNCHAPP_SNAPSHOT"] != nil
         #else
         let benching = false
+        let snapshotting = false
         #endif
-        // A bench run must not take over the installed app's control socket.
-        if benching { control = nil } else { control?.start() }
+        // A bench or snapshot run must not take over (and, on quit, delete) the installed app's
+        // control socket.
+        if benching || snapshotting { control = nil } else { control?.start() }
 
         #if DEBUG
         if benching {
@@ -108,7 +117,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // LAUNCHAPP_SNAPSHOT=/path.png — renders the launcher offscreen (works with the screen
         // locked; glass effects don't render there) and quits.
-        if let out = env["LAUNCHAPP_SNAPSHOT"] {
+        // LAUNCHAPP_SNAPSHOT_SETTINGS=<pane> + LAUNCHAPP_SNAPSHOT=/dir — renders that Settings page
+        // offscreen to /dir/settings-<pane>-{light,dark}.png instead, and quits.
+        if let out = env["LAUNCHAPP_SNAPSHOT"], let pane = env["LAUNCHAPP_SNAPSHOT_SETTINGS"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                SettingsState.shared.pane = SettingsPane(rawValue: pane) ?? .general
+                for dark in [false, true] {
+                    let size = CGSize(width: 760, height: 560)
+                    let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled],
+                                          backing: .buffered, defer: false)
+                    window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                    let host = NSHostingView(rootView: SettingsView(model: self.model, prefs: self.prefs, delegate: self)
+                        .frame(width: size.width, height: size.height)
+                        .background(Color(nsColor: .windowBackgroundColor))
+                        .environment(\.colorScheme, dark ? .dark : .light))
+                    host.frame = CGRect(origin: .zero, size: size)
+                    window.contentView = host
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+                    guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { continue }
+                    host.cacheDisplay(in: host.bounds, to: rep)
+                    let file = URL(fileURLWithPath: out).appendingPathComponent("settings-\(pane)-\(dark ? "dark" : "light").png")
+                    try? rep.representation(using: .png, properties: [:])?.write(to: file)
+                    print("[LaunchApp] snapshot \(file.path)")
+                }
+                NSApp.terminate(nil)
+            }
+        } else if let out = env["LAUNCHAPP_SNAPSHOT"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                 let renderer = ImageRenderer(content: LauncherView(model: self.model, prefs: self.prefs))
                 renderer.scale = 1
@@ -258,9 +292,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MenuEntry(title: "Open LaunchApp", symbol: "square.grid.3x3") { [weak self] in self?.launcher.show() },
                 MenuEntry(title: "Settings…", symbol: "gearshape") { [weak self] in self?.showSettings() },
                 MenuEntry(title: "Check for Updates…", symbol: "arrow.down.circle") { [weak self] in
-                    self?.showSettings(pane: .about)
-                    MainActor.assumeIsolated { Updater.shared.check(userInitiated: true) }
+                    self?.checkUpdates()
                 },
+            ] + whatsNewEntries() + [
                 .separator,
                 MenuEntry(title: "Quit LaunchApp", symbol: nil) { NSApp.terminate(nil) },
             ])
@@ -324,6 +358,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About LaunchApp", action: #selector(showAbout), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Check for Updates…", action: #selector(checkUpdates), keyEquivalent: "").target = self
+        let whatsNew = appMenu.addItem(withTitle: "What's New", action: #selector(showWhatsNew), keyEquivalent: "")
+        whatsNew.target = self
+        whatsNewItem = whatsNew
+        whatsNewSubscription = MainActor.assumeIsolated {
+            WhatsNewTracker.shared.$pendingVersion.sink { pending in
+                whatsNew.title = pending.map { "What's New in \($0)" } ?? "What's New"
+            }
+        }
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(openSettingsAction), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
@@ -377,10 +419,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     #endif
 
-    @objc private func showAbout() { showSettings(pane: .about) }
+    @objc private func showAbout() {
+        if launcher.isVisible { launcher.dismissLauncher(launching: true) }
+        MainActor.assumeIsolated {
+            AboutWindow.show(app: .launchApp, updater: .shared) { [weak self] in self?.showWhatsNew() }
+        }
+    }
     @objc private func openSettingsAction() { showSettings() }
     @objc private func checkUpdates() {
-        showSettings(pane: .about)
+        showSettings(pane: .updates)
         MainActor.assumeIsolated { Updater.shared.check(userInitiated: true) }
+    }
+
+    /// Release notes of the running version; clears the "What's New in X" menu item.
+    @objc func showWhatsNew() {
+        if launcher.isVisible { launcher.dismissLauncher(launching: true) }
+        MainActor.assumeIsolated {
+            let app = AppIdentity.launchApp
+            WhatsNewWindow.show(app: app, version: app.version, tracker: .shared)
+        }
+    }
+
+    /// "What's New in X" while an update hasn't been looked at yet.
+    private func whatsNewEntries() -> [MenuEntry] {
+        guard let title = MainActor.assumeIsolated({ WhatsNewTracker.shared.menuTitle }) else { return [] }
+        return [MenuEntry(title: title, symbol: "sparkles") { [weak self] in self?.showWhatsNew() }]
     }
 }

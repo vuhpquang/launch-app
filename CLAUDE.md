@@ -14,6 +14,9 @@ INSTALL=1 scripts/release.sh X.Y.Z notes.md  # …and replace /Applications/Laun
 PUBLISH=0 INSTALL=1 scripts/release.sh X.Y.Z  # office (no GitHub): commit + tag locally + install
 LAUNCHAPP_SNAPSHOT=/tmp/x.png .build/debug/LaunchApp           # offscreen render (works with screen locked)
 LAUNCHAPP_DEBUG=folder|edit|search:saf|page:1|settings:apps     # put the UI in a state
+LAUNCHAPP_SNAPSHOT=/tmp/dir LAUNCHAPP_SNAPSHOT_SETTINGS=general|updates|about .build/debug/LaunchApp --background
+#   → /tmp/dir/settings-<pane>-{light,dark}.png. Snapshot/bench runs never open the control socket
+#   (a debug run that did would delete the installed app's control.sock on quit).
 # frame-time bench (open, folder open/close, drags); drags reorder, so use a layout copy:
 swift build -c release -Xswiftc -DDEBUG --build-path .build-bench
 cp ~/Library/Application\ Support/LaunchApp/layout.json /tmp/l.json
@@ -52,7 +55,8 @@ Tests use `LauncherModel(prefs:, persists: false)` — never let tests touch the
 - `Settings/`. Self-update, About and the Settings shell come from **app-shell** (`Vendor/app-shell`, a git
   submodule pinned by commit; `.package(path:)`). LaunchApp's values for it live in
   `App/AppShell+LaunchApp.swift` (`AppIdentity.launchApp`, `Updater.shared`, an adapter over
-  `Preferences.settings` so the update keys stay). Fresh clone: `git submodule update --init`
+  `Preferences.settings` so the update keys stay, and `WhatsNewTracker.shared` — "What's New in X" shows
+  in the app menu and the menu-bar menu after an update; About LaunchApp opens the shared About window). Fresh clone: `git submodule update --init`
   (build.sh / release.sh do it). Changing the shared code = change `vuhpquang/app-shell`, then
   `git -C Vendor/app-shell pull` here and commit the pointer (hub rule `.claude/rules/app-shell.md`).
 

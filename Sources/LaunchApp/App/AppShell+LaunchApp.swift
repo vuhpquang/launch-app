@@ -2,6 +2,7 @@
 // LaunchApp's values for the shared app shell (Vendor/app-shell): who it is, where its releases are,
 // and where its update settings live (Preferences.settings — the keys stay as they were).
 
+import AboutKit
 import AppKit
 import AppShellCore
 import Combine
@@ -51,4 +52,10 @@ extension Updater {
         updater.relaunchArguments = ["--background"]
         return updater
     }()
+}
+
+extension WhatsNewTracker {
+    /// Offers "What's New in X" in LaunchApp's menus once after an update (it's a background app,
+    /// so no window opens by itself).
+    @MainActor static let shared = WhatsNewTracker(app: .launchApp)
 }
